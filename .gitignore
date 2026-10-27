@@ -1,0 +1,20 @@
+bin/
+obj/
+quest/out/
+quest/cfg/
+*.obj
+*.pdb
+*.ilk
+*.exp
+# OpenXR SDK: only the headers, the Win32 loader and its license are needed
+deps/openxr/*
+!deps/openxr/include/
+!deps/openxr/share/
+!deps/openxr/Win32/
+deps/openxr/Win32/*
+!deps/openxr/Win32/bin/
+!deps/openxr/Win32/lib/
+deps/openxr/Win32/bin/*
+!deps/openxr/Win32/bin/openxr_loader.dll
+deps/openxr/Win32/lib/*
+!deps/openxr/Win32/lib/openxr_loader.lib

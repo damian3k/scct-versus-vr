@@ -1,0 +1,116 @@
+SCCT Versus VR - Controls (Meta Quest / Touch controllers)
+===========================================================
+
+The mod sends keyboard/mouse input to the game, so every action below is the game's own
+action on the stock keyboard layout (key shown in brackets). Keep the game window focused
+(click it once after starting the game).
+
+"Tap" = quick press. "Hold" = keep pressed for about 0.35 s.
+
+
+MERCENARY (first person, aiming with the controller)
+----------------------------------------------------
+Right controller (point)    Aim the weapon - the gun is in your right hand and shoots
+                            where you point it (the merc's laser shows the aim)
+Right trigger               Fire                              [Left mouse]
+Left trigger                Alt-fire / gadget / hold breath   [Right mouse]
+Left stick                  Move                              [W A S D]
+Left stick click            Walk / run                        [Middle mouse]
+Right stick left/right      Turn your body (smooth turn)
+Right stick up/down         Switch item / gadget              [Mouse wheel]
+Right stick click           Fire mode / flashlight            [E]
+Right grip                  Use / interact                    [Shift]
+Left grip                   Roll / laser                      [Q]
+A                           Jump                              [Space]
+B                           Crouch                            [C]
+X                           Reload                            [R]
+Y  (tap)                    Vision modes                      [Tab]
+Y  (hold)                   Co-op move                        [T]
+Menu button                 In-game menu                      [Esc]
+
+
+MERCENARY ZOOM (Assault Gun sniper mode / binoculars)
+-----------------------------------------------------
+Eyes to the gun             Zoom on: raise the right controller close to your face
+                            (~20 cm) pointing where you look, like putting your eye
+                            to the sights                     [B]
+Head away from the gun      Zoom off                          [B]
+Right controller (move)     Moves the crosshair like a mouse; the view follows it
+Right stick up/down         Zoom in / out                     [Mouse wheel]
+Left trigger (hold)         Hold breath (steadier aim)        [Right mouse]
+Right trigger               Fire                              [Left mouse]
+
+While zoomed, the game's own zoomed view (scope overlay, crosshair, HUD) is shown on a
+screen in front of your eyes. Lift your head and the normal VR view comes back.
+
+
+SPY (third person)
+------------------
+Right controller (turn)     Steer the camera / aim a drawn weapon - only the
+                            controller's rotation counts, moving your hand does nothing
+Right stick left/right      Turn your body (smooth turn)
+Right stick up/down         Switch item / gadget              [Mouse wheel]
+Right trigger               Fire / quick gadget               [Left mouse]
+Left trigger                Alt-fire / quick gadget           [Right mouse]
+Left stick                  Move                              [W A S D]
+Left stick click            Walk / run                        [Middle mouse]
+Right stick click           Draw / put away the weapon        [E]
+Right grip                  Use / interact                    [Shift]
+Left grip                   Roll / laser                      [Q]
+A                           Jump                              [Space]
+B                           Crouch                            [C]
+Controller to your face     Binoculars on (hold the right controller up to your
+                            eyes like binoculars); take it away = binoculars off  [B]
+  while in binoculars:      look around with your HEAD, right stick up/down = zoom
+X  (tap)                    Next gadget                       [Mouse wheel down]
+X  (hold)                   Previous gadget                   [Mouse wheel up]
+Y  (tap)                    Vision modes                      [Tab]
+Y  (hold)                   Co-op move                        [T]
+Menu button                 In-game menu                      [Esc]
+
+Both stick clicks           First-person view on / off (EXPERIMENTAL - the view from
+  (at the same time)        the spy's eyes; the game is not made for it and it can
+                            glitch, click both again to go back to third person)
+
+The Spy controls are used automatically whenever no first-person weapon is on screen.
+The VR view stays steady behind the spy while the controller turns the camera: after
+spawning, stand still for a moment and look around with the controller once so the mod
+can learn the camera. Old mode (the right stick moves the camera like a mouse instead of
+the controller): set SpyAim=0 in SCCT_VR.ini.
+
+
+MENUS (main menu, match menus, in-game Esc menu)
+------------------------------------------------
+Left stick                  Move the selection                [Arrow keys]
+A                           Confirm                           [Enter]
+B                           Back                              [Esc]
+Right stick                 Move the mouse cursor
+Right trigger               Click                             [Left mouse]
+
+The menu controls switch on and off automatically: as soon as a menu (including the
+in-game menu during a match) is on screen the controller uses them, and when you leave it
+the normal game controls come back - however you leave it (Back, A, B or the Menu button).
+
+
+KEYBOARD (while playing in VR)
+------------------------------
+Home                        Recenter the view (holding the Meta button on the Quest also works)
+End                         Controller aiming on / off
+Insert                      HUD mode: follows the weapon <-> fixed in front of you
+Num + / Num -               Bigger / smaller HUD (the value is written to SCCT_VR.log)
+Pause                       Diagnostic frame dump (SCCT_VR_frame.txt)
+
+
+CHANGING THE CONTROLS
+---------------------
+All of this can be changed in System\SCCT_VR.ini:
+  [Bindings]      normal game controls (Mercenary)
+  [SpyBindings]   overrides while playing the Spy
+  [MenuBindings]  overrides in menus
+Any control can also get a second action on a long press:  <Name>Hold=<key>
+(for example YHold=T). ScopeKey=<key> in [Bindings] is the key the zoom gesture presses.
+Control names: RightTrigger, LeftTrigger, RightGrip, LeftGrip,
+A, B, X, Y, LeftStickClick, RightStickClick, Menu, LeftStickUp/Down/Left/Right,
+RightStickUp/Down. Keys: a letter or digit, F1-F12, Space, Shift, Ctrl, Alt, Tab, Esc,
+Enter, Backspace, Home, End, PgUp, PgDn, Up, Down, Left, Right, LMB, RMB, MMB,
+WheelUp, WheelDown, or empty to unbind.

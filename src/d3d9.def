@@ -1,0 +1,25 @@
+LIBRARY d3d9
+EXPORTS
+    D3DPERF_BeginEvent                       = Stub0  @27
+    D3DPERF_EndEvent                         = Stub1  @28
+    D3DPERF_GetStatus                        = Stub2  @29
+    D3DPERF_QueryRepeatFrame                 = Stub3  @30
+    D3DPERF_SetMarker                        = Stub4  @31
+    D3DPERF_SetOptions                       = Stub5  @32
+    D3DPERF_SetRegion                        = Stub6  @33
+    DebugSetLevel                            = Stub7  @34
+    DebugSetMute                             = Stub8  @35
+    Direct3D9EnableMaximizedWindowedModeShim = Stub9  @36
+    Direct3DCreate9                          = Proxy_Direct3DCreate9 @37
+    Direct3DCreate9Ex                        = Stub10 @38
+    Direct3DCreate9On12                      = Stub11 @20
+    Direct3DCreate9On12Ex                    = Stub12 @21
+    Direct3DShaderValidatorCreate9           = Stub13 @24
+    PSGPError                                = Stub14 @25
+    PSGPSampleTexture                        = Stub15 @26
+    Ordinal16                                = Stub16 @16 NONAME
+    Ordinal17                                = Stub17 @17 NONAME
+    Ordinal18                                = Stub18 @18 NONAME
+    Ordinal19                                = Stub19 @19 NONAME
+    Ordinal22                                = Stub20 @22 NONAME
+    Ordinal23                                = Stub21 @23 NONAME
