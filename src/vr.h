@@ -38,6 +38,8 @@ struct MirrorFrame {
     int eye;
     float left, right, up, down;
     bool hud;           // this frame drew HUD
+    bool hudPanel;      // hudVerts valid: the HUD panel as the headset shows it in this eye
+    float hudVerts[4][6];   // x, y (backbuffer pixels), z, rhw, u, v; triangle strip
 };
 bool MirrorFrameInfo(MirrorFrame* out);
 // The HUD texture (AddRef'd, caller releases), or nullptr.

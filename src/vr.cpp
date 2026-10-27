@@ -1629,12 +1629,11 @@ void OnPresent(IDirect3DDevice9* dev)
         BeginPair();
 }
 
-bool HudOverlay(IDirect3DTexture9** tex, float verts[4][6])
+// The HUD panel (same pose as the OpenXR HUD layer: follows the game camera so markers sit on
+// their targets) projected into eye `e`'s image: 4 pretransformed vertices in backbuffer pixels.
+bool HudPanelVerts(int e, float verts[4][6])
 {
-    // XR API: no compositor layers, so the HUD panel is drawn into each eye image. Same pose as
-    // the OpenXR HUD layer (follows the game camera so markers sit on their targets).
-    if (!S.xrapi || !S.hudTex || !S.hudDrawn || !S.viewsValid || S.frameScope || S.xrSceneFrames < 2 || !S.width)
-        return false;
+    if (!S.viewsValid || !S.width || !S.height) return false;
     bool aiming = S.aimOn && S.bodyValid;
     bool follow = !aiming || S.hudFollow;
     Quat q = (follow && S.hudRelValid) ? Mul(S.refQ, S.hudRel) : S.refQ;
@@ -1643,7 +1642,7 @@ bool HudOverlay(IDirect3DTexture9** tex, float verts[4][6])
     Vec3 center = S.refP + Rotate(q, { 0, 0, -d });
     float hw = d * S.gameTanX * scale, hh = d * S.gameTanY * scale;
 
-    const XrView& eye = S.views[S.curEye];
+    const XrView& eye = S.views[e];
     Quat inv = Conj(ToQuat(eye.pose.orientation));
     Vec3 ep = ToVec(eye.pose.position);
     float l = tanf(eye.fov.angleLeft), r = tanf(eye.fov.angleRight);
@@ -1662,6 +1661,14 @@ bool HudOverlay(IDirect3DTexture9** tex, float verts[4][6])
         verts[i][4] = corner[i][2];
         verts[i][5] = corner[i][3];
     }
+    return true;
+}
+
+bool HudOverlay(IDirect3DTexture9** tex, float verts[4][6])
+{
+    // XR API: no compositor layers, so the HUD panel is drawn into each eye image.
+    if (!S.xrapi || !S.hudTex || !S.hudDrawn || S.frameScope || S.xrSceneFrames < 2) return false;
+    if (!HudPanelVerts(S.curEye, verts)) return false;
     *tex = S.hudTex;
     return true;
 }
@@ -1678,6 +1685,10 @@ bool MirrorFrameInfo(MirrorFrame* out)
     out->up = tanf(f.angleUp);
     out->down = tanf(-f.angleDown);
     out->hud = S.hudDrawn;
+    // Where the headset shows the HUD panel in this eye (this frame's head pose: after Present
+    // the next frame's views are already in place). Without the game camera this frame the
+    // VR layer is placed differently, so the mirror then draws the HUD over the whole window.
+    out->hudPanel = S.hudDrawn && S.gameAnglesValid && HudPanelVerts(S.curEye, out->hudVerts);
     return out->left > 0 && out->right > 0 && out->up > 0 && out->down > 0;
 }
 

@@ -76,7 +76,7 @@ struct Config {
     float spyFpvHideRadius = 60.0f;   // draws whose origin is this close to the spy are its own model
     bool  spyFpvShowBody = true;      // keep drawing the body (hands, arms); only small gear is hidden
 
-    bool  desktopMirror = true;       // PC window during gameplay: left eye + HUD (for streaming) instead of alternating eyes
+    int   desktopMirror = 2;          // PC window during gameplay: 0 raw frames, 1 right eye + HUD over the window, 2 right eye + HUD as in the headset
     int   dumpEverySec = 0;           // diagnostics: write a frame dump every N seconds of gameplay (0 = off)
     bool  d3d12DebugLayer = false;
     int   statsIntervalSec = 10;

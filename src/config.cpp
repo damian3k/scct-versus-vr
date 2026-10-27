@@ -87,7 +87,7 @@ void LoadConfig()
     g_cfg.spyEyeForward           = ReadFloat(L"SpyEyeForward", d.spyEyeForward);
     g_cfg.spyFpvHideRadius        = ReadFloat(L"SpyFpvHideRadius", d.spyFpvHideRadius);
     g_cfg.spyFpvShowBody          = ReadInt(L"SpyFpvShowBody", d.spyFpvShowBody) != 0;
-    g_cfg.desktopMirror           = ReadInt(L"DesktopMirror", d.desktopMirror) != 0;
+    g_cfg.desktopMirror           = ReadInt(L"DesktopMirror", d.desktopMirror);
     g_cfg.dumpEverySec            = ReadInt(L"DumpEverySec", d.dumpEverySec);
     g_cfg.d3d12DebugLayer         = ReadInt(L"D3D12DebugLayer", d.d3d12DebugLayer) != 0;
     g_cfg.statsIntervalSec        = ReadInt(L"StatsIntervalSec", d.statsIntervalSec);

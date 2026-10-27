@@ -1051,6 +1051,15 @@ void UpdateDesktopMirror(IDirect3DDevice9* dev, const vr::MirrorFrame& mf)
                 float fw = (float)D.bbW, fh = (float)D.bbH;
                 float v[4][6] = { { -0.5f, -0.5f, 0, 1, 0, 0 }, { fw - 0.5f, -0.5f, 0, 1, 1, 0 },
                                   { -0.5f, fh - 0.5f, 0, 1, 0, 1 }, { fw - 0.5f, fh - 0.5f, 0, 1, 1, 1 } };
+                if (g_cfg.desktopMirror == 2 && mf.hudPanel) {
+                    // As in the headset: the panel where it sits in this eye, through the same crop.
+                    float sx = fw / (src.right - src.left), sy = fh / (src.bottom - src.top);
+                    memcpy(v, mf.hudVerts, sizeof(v));
+                    for (int i = 0; i < 4; i++) {
+                        v[i][0] = (v[i][0] + 0.5f - src.left) * sx - 0.5f;
+                        v[i][1] = (v[i][1] + 0.5f - src.top) * sy - 0.5f;
+                    }
+                }
                 DrawPremultipliedQuad(dev, mirror, hud, v);
                 hud->Release();
             }

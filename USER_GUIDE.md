@@ -5,7 +5,7 @@ with head tracking, aim the Mercenary's gun with your right controller and use Q
 controllers for everything else. Other players do not need the mod — you can play with people on
 a normal screen.
 
-Version 0.8.1 · Gameplay video: https://www.youtube.com/watch?v=nbMLmVTR_hc
+Version 0.8.3 · Gameplay video: https://www.youtube.com/watch?v=nbMLmVTR_hc
 
 ## Requirements
 
@@ -174,7 +174,7 @@ Every option is commented in the file. The most useful ones:
 | `MenuMouseSpeed` | 1500 | right-stick cursor speed in menus |
 | `WeaponOffsetX/Y/Z`, `WeaponPitch` | 10 / −15 / 20, 0 | position/tilt of the gun in your hand |
 | `FixProjectedLights` | 1 | keeps the flashlight and shadows fixed to the world |
-| `DesktopMirror` | 1 | PC window during gameplay: 1 = a steady view (right eye) with the HUD, for streaming / people watching; 0 = the raw headset frames (eyes alternate, no HUD) |
+| `DesktopMirror` | 2 | PC window during gameplay (for streaming / people watching), the right eye: 2 = like in the headset, the HUD where you see it in VR (the crosshair follows the gun); 1 = the HUD over the whole window; 0 = the raw headset frames (eyes alternate, no HUD) |
 
 ## Troubleshooting
 

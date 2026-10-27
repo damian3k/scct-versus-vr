@@ -30,7 +30,7 @@ For players: see [`USER_GUIDE.md`](USER_GUIDE.md) and [`controls.txt`](controls.
 
 ---
 
-## Status (v0.8.1)
+## Status (v0.8.3)
 
 Working (tested on Meta Quest 3 through Virtual Desktop, RTX 3090, online matches):
 
@@ -47,8 +47,8 @@ Working (tested on Meta Quest 3 through Virtual Desktop, RTX 3090, online matche
 - Volumetric light shafts (e.g. the sunbeams in Warehouse) and the merc's flashlight cone seen
   from outside are in the right place in both eyes.
 - Spy camouflage suit: the see-through effect works in VR.
-- The PC window shows a steady view (the right eye) with the HUD, for streaming / people
-  watching (`DesktopMirror`).
+- The PC window shows what the headset shows (the right eye, with the HUD where it is in VR),
+  for streaming / people watching (`DesktopMirror`).
 - HUD on its own OpenXR quad layer that follows the game camera, so objective markers sit on
   their targets; menus (main and in-game) on a flat virtual screen with menu controls.
 - Quest/Touch controllers mapped to keyboard/mouse (configurable, separate spy and menu sets,
@@ -210,6 +210,15 @@ menus the frame has no 3D world or its last pretransformed (XYZRHW) sprite is th
 the in-game menu during a match is drawn over the HUD (XYZ + ortho, not XYZRHW) and is recognised
 by its 512x512 background panel texture, which the gameplay HUD never uses (read with
 `GetTexture`, see `Stage0Size` in `hooks.cpp`). Leaving the menu any way returns the game controls.
+
+### PC window
+During gameplay the backbuffer alternates between the eyes and has no HUD (it is a separate VR
+layer). After each right-eye frame has gone to the headset, it is copied into a mirror texture,
+cropped to the window's proportions around the eye's forward direction; the HUD texture is drawn
+over it at the panel's projection in that eye (computed from the same frame's head pose, before
+the next frame's views are located), or over the whole window with `DesktopMirror=1`. On
+left-eye frames the mirror is copied back into the backbuffer before `Present`, so the window
+never shows the left eye.
 
 ### Mercenary aiming
 The game camera is steered towards the right controller's aim ray with emulated relative mouse
