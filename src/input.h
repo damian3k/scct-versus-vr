@@ -6,6 +6,7 @@
 #include <d3d12.h>
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
+#include "xrapi.h"
 
 namespace input {
 
@@ -32,6 +33,14 @@ bool Init(XrInstance instance, XrSession session);
 // `spyMode`: gameplay without controller aiming; [SpyBindings] override the game bindings.
 void Update(XrSession session, XrSpace localSpace, XrTime time, bool focused, bool rightStickButtons, bool menuMode,
             bool spyMode, Controls* out);
+
+// WinlatorXR's XR API: the controllers come in its tracking packet instead of OpenXR actions.
+// `controllerRoll`: degrees the packet's controller orientation is rolled against an OpenXR aim pose.
+void InitXrApi();
+// Makes GetKeyState / GetAsyncKeyState report keys held through window messages (XR API).
+void InstallKeyStateHooks();
+void UpdateXrApi(const xrapi::Packet& p, bool focused, bool rightStickButtons, bool menuMode, bool spyMode,
+                 float controllerRoll, Controls* out);
 
 bool GameHasFocus();
 void SendMouseMove(int dx, int dy);

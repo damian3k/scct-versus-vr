@@ -10,6 +10,7 @@
 #include "config.h"
 #include "vr.h"
 #include "hooks.h"
+#include "dihook.h"
 
 HMODULE g_self;
 
@@ -29,6 +30,14 @@ static const int kOrdinalCount = sizeof(kOrdinals) / sizeof(kOrdinals[0]);
 extern "C" FARPROC g_procs[kNamedCount + kOrdinalCount] = {};
 static FARPROC g_realCreate9;
 
+// The ordinal-only exports are compatibility shims taking one int (e.g.
+// Direct3D9SetSwapEffectUpgradeShim). Wine's d3d9 does not have them; callers that find our
+// export would otherwise jump to null.
+extern "C" int WINAPI MissingShim(int)
+{
+    return 0;
+}
+
 static BOOL CALLBACK LoadReal(PINIT_ONCE, PVOID, PVOID*)
 {
     wchar_t path[MAX_PATH];
@@ -37,7 +46,10 @@ static BOOL CALLBACK LoadReal(PINIT_ONCE, PVOID, PVOID*)
     g_real = LoadLibraryW(path);
     if (!g_real) return TRUE;
     for (int i = 0; i < kNamedCount; i++) g_procs[i] = GetProcAddress(g_real, kNamed[i]);
-    for (int i = 0; i < kOrdinalCount; i++) g_procs[kNamedCount + i] = GetProcAddress(g_real, MAKEINTRESOURCEA(kOrdinals[i]));
+    for (int i = 0; i < kOrdinalCount; i++) {
+        g_procs[kNamedCount + i] = GetProcAddress(g_real, MAKEINTRESOURCEA(kOrdinals[i]));
+        if (!g_procs[kNamedCount + i]) g_procs[kNamedCount + i] = (FARPROC)MissingShim;
+    }
     g_realCreate9 = GetProcAddress(g_real, "Direct3DCreate9");
     return TRUE;
 }
@@ -128,7 +140,19 @@ extern "C" IDirect3D9* WINAPI Proxy_Direct3DCreate9(UINT sdk)
     static bool configLoaded = false;
     if (!configLoaded) { LoadConfig(); configLoaded = true; }
 
-    if (g_cfg.enabled && vr::Init()) {
+    if (g_cfg.enabled && vr::Init() && vr::UsesXrApi()) {
+        // WinlatorXR: a plain D3D9 device (Wine), the game window is what the headset shows.
+        dihook::InstallEarly();     // in case dinput8 was not loaded yet at DllMain
+        IDirect3D9* d3d = ((Create9_t)g_realCreate9)(sdk);
+        Log("Direct3DCreate9(%u) -> plain D3D9 for the XR API (%p)", sdk, d3d);
+        if (d3d) {
+            HookDirect3D9(d3d);
+            static bool exitHooked = false;
+            if (!exitHooked) { HookExitProcess(); exitHooked = true; }
+        }
+        return d3d;
+    }
+    if (g_cfg.enabled && vr::Available()) {
         auto create9On12 = (Create9On12_t)g_procs[11];
         if (create9On12) {
             D3D9ON12_ARGS args = {};
@@ -156,6 +180,12 @@ BOOL WINAPI DllMain(HMODULE mod, DWORD reason, LPVOID)
     if (reason == DLL_PROCESS_ATTACH) {
         g_self = mod;
         DisableThreadLibraryCalls(mod);
+        // WinlatorXR container: the game's DirectInput keyboard must be wrapped before the game
+        // creates it (it does not see keys injected under Wine).
+        if (GetFileAttributesW(L"Z:\\tmp\\xr\\system") != INVALID_FILE_ATTRIBUTES) {
+            LogInit();
+            dihook::InstallEarly();
+        }
     }
     return TRUE;
 }

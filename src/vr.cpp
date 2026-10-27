@@ -19,6 +19,9 @@
 #include "config.h"
 #include "log.h"
 #include "input.h"
+#include "xrapi.h"
+#include "rawinject.h"
+#include "dihook.h"
 
 #include <dxgi1_4.h>
 #include <d3d9on12.h>
@@ -36,6 +39,18 @@ struct EyeSwapchain {
 struct State {
     bool initTried = false;
     bool ok = false;
+
+    // WinlatorXR XR API backend (standalone headset) instead of OpenXR: no swapchains or layers,
+    // the game window itself is shown, one eye per game frame (alternate-eye mode).
+    bool xrapi = false;
+    int xrSync = 0;             // HMD_SYNC of the pose this frame is rendered with
+    int xrEyeNext = 0;
+    unsigned xrSceneFrames = 0; // consecutive 3D gameplay frames
+    int xrSentVr = -1, xrSent3D = -1;
+    DWORD xrStateTick = 0;
+    unsigned xrPackets = 0;
+    bool xrLoggedFov = false;
+    xrapi::Packet xrPacket = {};    // latest packet (controllers for the input layer)
 
     XrInstance instance = XR_NULL_HANDLE;
     XrSystemId system = XR_NULL_SYSTEM_ID;
@@ -109,6 +124,7 @@ struct State {
     bool aimOn = true;          // user toggle (End key / AimToggle binding)
     DWORD lastWeaponTick = 0;   // last frame a first-person weapon was drawn
     unsigned frameSceneDraws = 0;
+    unsigned skipNoResources = 0, skipNoRender = 0, skipNoViews = 0, skipCopyFailed = 0;
     D3DMATRIX eyeProj[2];
     bool aimKeyDown = false;
     bool bodyValid = false;
@@ -992,7 +1008,14 @@ void UpdateControls(bool sceneLast)
     // merc's weapon is not drawn either, so the zoom remembers who started it).
     bool spyChar = g_cfg.aimMode == 2 && (S.frameScope ? S.scopeHead : SpyCharacter());
     bool spyMode = sceneLast && !menuUi && (!aimActive || spyChar);
-    input::Update(S.session, S.localSpace, S.frameState.predictedDisplayTime, focused, aimActive, menuUi, spyMode, &S.ctl);
+    if (S.xrapi) {
+        if (S.viewsValid)
+            input::UpdateXrApi(S.xrPacket, focused, aimActive, menuUi, spyMode, g_cfg.xrApiControllerRoll, &S.ctl);
+        else
+            S.ctl = input::Controls();
+    } else {
+        input::Update(S.session, S.localSpace, S.frameState.predictedDisplayTime, focused, aimActive, menuUi, spyMode, &S.ctl);
+    }
 
     if (menuUi != S.lastMenuUi) {
         Log("Controller mode: %s%s%s", menuUi ? "menu" : "game", cursorSeen ? " (menu cursor seen)" : "",
@@ -1254,16 +1277,149 @@ void PrintStats()
         g_cfg.mouseCountsPerDegree > 0 ? g_cfg.mouseCountsPerDegree : S.countsPerDeg, input::GameHasFocus(),
         S.spyFpv ? ", spy first person" : "");
     if (S.spyFpv) Log("Spy first person: %.1f hidden draws/frame (own model)", S.hiddenDraws / (float)(S.presents ? S.presents : 1));
+    if (S.skipNoResources || S.skipNoRender || S.skipNoViews || S.skipCopyFailed)
+        Log("Frames not sent to the headset: %u no resources, %u runtime says do not render, %u no head tracking, %u copy failed",
+            S.skipNoResources, S.skipNoRender, S.skipNoViews, S.skipCopyFailed);
+    S.skipNoResources = S.skipNoRender = S.skipNoViews = S.skipCopyFailed = 0;
+    if (S.xrapi) {
+        static unsigned lastPackets;
+        Log("XrAPI: %.1f tracking packets/s, sync %d, tracking %s", (S.xrPackets - lastPackets) / sec, S.xrSync,
+            S.viewsValid ? "ok" : "LOST");
+        lastPackets = S.xrPackets;
+        char raw[256];
+        rawinject::Stats(raw, sizeof(raw));
+        Log("%s", raw);
+        dihook::Stats(raw, sizeof(raw));
+        Log("%s", raw);
+    }
     S.presents = S.pairs = S.stereoViews = S.quadPairs = S.hudPairs = S.scopePairs = S.hiddenDraws = 0;
     S.statsStart = now;
 }
 
+// --- WinlatorXR XR API backend -------------------------------------------------------------
+
+// Start of a game frame: the latest tracking packet gives both eye poses (head pose +/- half
+// the IPD) and the FOV; this frame renders the next eye in turn.
+void XrApiBeginFrame()
+{
+    // The HUD texture the device hooks draw the 2D layer into (recreated after a device reset).
+    if (!S.hudTex && S.dev9 && g_cfg.hudLayer && S.width) {
+        HRESULT hr = S.dev9->CreateTexture(S.width, S.height, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8,
+                                           D3DPOOL_DEFAULT, &S.hudTex, nullptr);
+        if (FAILED(hr)) Log("CreateTexture(hud) failed 0x%08X", hr);
+    }
+
+    xrapi::Packet p;
+    DWORD age = 0;
+    S.viewsValid = xrapi::Latest(&p, &age, &S.xrPackets) && age < 1000;
+    S.curEye = S.xrEyeNext;
+    S.xrEyeNext ^= 1;
+    if (S.viewsValid) {
+        Quat hq = { p.headQ[0], p.headQ[1], p.headQ[2], p.headQ[3] };
+        Vec3 hp = { p.headPos[0], p.headPos[1], p.headPos[2] };
+        if (S.recenterPending) {
+            S.refQ = YawOnly(hq);
+            S.refP = hp;
+            S.recenterPending = false;
+            Log("Recentered (head at %.2f %.2f %.2f m)", hp.x, hp.y, hp.z);
+        }
+        float half = (p.ipd > 0.04f && p.ipd < 0.09f ? p.ipd : 0.063f) * 0.5f;
+        if (!g_cfg.xrApiStereo) half = 0.0f;    // mono: both eyes see the head-center view
+        float fx = (p.fovX > 1.0f ? p.fovX : 100.0f) * 0.5f / kDeg;
+        float fy = (p.fovY > 1.0f ? p.fovY : 100.0f) * 0.5f / kDeg;
+        for (int e = 0; e < 2; e++) {
+            S.views[e].pose.orientation = ToXr(hq);
+            S.views[e].pose.position = ToXr(hp + Rotate(hq, { e ? half : -half, 0, 0 }));
+            S.views[e].fov = { -fx, fx, fy, -fy };
+        }
+        S.xrSync = p.sync;
+        S.xrPacket = p;
+        if (!S.xrLoggedFov) {
+            S.xrLoggedFov = true;
+            Log("XrAPI: eye FOV %.1f x %.1f deg, IPD %.1f mm", fx * 2 * kDeg, fy * 2 * kDeg, half * 2000);
+        }
+    }
+
+    bool sceneLast = S.xrSceneFrames >= 2 && S.gameAnglesValid;
+    S.sceneLastPair = sceneLast;
+    UpdateControls(sceneLast);
+    S.gameAnglesValid = false;
+    if (S.viewsValid) ComputeEyeMatrices();
+    S.handValid = S.ctl.aimValid;
+    if (S.handValid) S.handMat = PoseToBody(S.ctl.aim);
+    S.frameOpen = true;
+}
+
+// End of a game frame (right before Present): tell WinlatorXR how to show it and stamp the
+// frame with its pose's sync value (red) and its eye (blue).
+void XrApiEndFrame(IDirect3DDevice9* dev)
+{
+    if (!S.frameOpen) return;
+    S.frameOpen = false;
+    // Zoomed frames keep the game's camera (no stereo draws) but are still gameplay.
+    bool zoomed = S.frameScope && S.anglesThisFrame;
+    bool scene = S.frameSceneDraws >= (unsigned)g_cfg.minSceneDraws || zoomed;
+    S.xrSceneFrames = scene ? S.xrSceneFrames + 1 : 0;
+    // Menus, loading screens and the zoom (binoculars / sniper mode): a flat screen.
+    bool immersive = S.xrSceneFrames >= 2 && !zoomed;
+    if (scene) S.stereoViews++;
+    else S.quadPairs++;
+
+    int vrMode = immersive ? xrapi::kVrImmersive : xrapi::kVrScreen;
+    // Stereo: one eye per game frame (alternate eyes). Mono: every frame shown to both eyes.
+    bool stereo = immersive && g_cfg.xrApiStereo;
+    int mode3D = stereo ? xrapi::k3DAlternateEye : xrapi::k3DFlat;
+    DWORD now = GetTickCount();
+    if (vrMode != S.xrSentVr || mode3D != S.xrSent3D || now - S.xrStateTick > 1000) {
+        if (vrMode != S.xrSentVr)
+            Log("XrAPI: %s", immersive ? (stereo ? "immersive VR, alternate eyes" : "immersive VR, mono")
+                                       : zoomed ? "screen mode (zoom)" : "screen mode (menu)");
+        xrapi::SendState(vrMode, mode3D, 0.0f, 0.0f);
+        S.xrSentVr = vrMode;
+        S.xrSent3D = mode3D;
+        S.xrStateTick = now;
+    }
+
+    IDirect3DSurface9* bb = nullptr;
+    if (SUCCEEDED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb))) {
+        RECT r = { 0, 0, 10, 10 };
+        dev->ColorFill(bb, &r, D3DCOLOR_XRGB(S.xrSync & 0xFF, 0, stereo && S.curEye ? 255 : 0));
+        bb->Release();
+    }
+    S.pairs++;
+}
+
 } // namespace
+
+bool UsesXrApi() { return S.xrapi; }
 
 bool Init()
 {
     if (S.initTried) return S.ok;
     S.initTried = true;
+
+    // Standalone headset in a WinlatorXR container: its XR API replaces OpenXR.
+    if (g_cfg.backend == 2 || (g_cfg.backend == 0 && xrapi::Available())) {
+        S.ok = S.xrapi = xrapi::Start();
+        Log(S.ok ? "VR initialized (WinlatorXR XR API)" : "WinlatorXR XR API not available - running in flat mode");
+        if (S.ok) {
+            S.running = true;
+            S.sessionState = XR_SESSION_STATE_FOCUSED;
+            S.frameState.shouldRender = XR_TRUE;
+            // The controllers come in the tracking packet and go through the same bindings as
+            // with OpenXR. The zoom is shown with WinlatorXR's screen mode.
+            input::InitXrApi();
+            S.aimOn = g_cfg.aimMode != 0;
+            S.hudFollow = g_cfg.hudFollowAim;
+            S.hudDistance = g_cfg.hudDistance;
+            S.hudFollowScale = g_cfg.hudFollowScale;
+            S.eyeRight = g_cfg.spyEyeRight;
+            S.eyeUp = g_cfg.spyEyeUp;
+            S.eyeFwd = g_cfg.spyEyeForward;
+        }
+        return S.ok;
+    }
+
     S.ok = CreateInstance() && CreateD3D12() && CreateSession();
     Log(S.ok ? "VR initialized" : "VR initialization failed - running in flat mode");
     if (S.ok) {
@@ -1288,6 +1444,21 @@ void OnDeviceCreated(IDirect3DDevice9* dev, HWND wnd)
     if (!S.ok) return;
     S.gameWnd = wnd;
     input::SetGameWindow(wnd);
+    if (S.xrapi) {
+        S.dev9 = dev;
+        IDirect3DSurface9* bb = nullptr;
+        if (SUCCEEDED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb))) {
+            D3DSURFACE_DESC d;
+            bb->GetDesc(&d);
+            S.width = d.Width;
+            S.height = d.Height;
+            bb->Release();
+        }
+        Log("Device ready (XR API, %ux%u)", S.width, S.height);
+        rawinject::Install(wnd);
+        input::InstallKeyStateHooks();
+        return;
+    }
     if (S.dev9On12) { S.dev9On12->Release(); S.dev9On12 = nullptr; }
     ReleaseD3D9Resources();
     S.dev9 = dev;
@@ -1304,8 +1475,21 @@ void OnPreReset()
     ReleaseD3D9Resources();
 }
 
-void OnPostReset(IDirect3DDevice9*)
+void OnPostReset(IDirect3DDevice9* dev)
 {
+    // XR API: the game switches to its fullscreen size with a Reset after startup; the HUD
+    // texture (recreated next frame) and its projection have to use the new backbuffer size.
+    if (S.xrapi && dev == S.dev9) {
+        IDirect3DSurface9* bb = nullptr;
+        if (SUCCEEDED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb))) {
+            D3DSURFACE_DESC d;
+            bb->GetDesc(&d);
+            S.width = d.Width;
+            S.height = d.Height;
+            bb->Release();
+        }
+        Log("Backbuffer after Reset: %ux%u", S.width, S.height);
+    }
 }
 
 void OnPresent(IDirect3DDevice9* dev)
@@ -1345,15 +1529,22 @@ void OnPresent(IDirect3DDevice9* dev)
         S.recenterKeyDown = down;
     }
 
-    bool resources = S.running && EnsureResources(dev);
+    bool resources = !S.xrapi && S.running && EnsureResources(dev);
 
-    if (S.frameOpen) {
+    if (S.xrapi) {
+        XrApiEndFrame(dev);
+    } else if (S.frameOpen) {
         int eye = S.curEye;
         // Zoomed frames are drawn without the eye camera, so they have no stereo draws.
         S.eyeScope[eye] = S.frameScope && S.anglesThisFrame;
         S.eyeScene[eye] = S.frameSceneDraws >= (unsigned)g_cfg.minSceneDraws || S.eyeScope[eye];
         if (resources && S.frameState.shouldRender && S.viewsValid)
             S.eyeCopied[eye] = CopyBackbufferToEye(dev, eye);
+        // Why frames do not reach the headset (statistics)
+        if (!resources) S.skipNoResources++;
+        else if (!S.frameState.shouldRender) S.skipNoRender++;
+        else if (!S.viewsValid) S.skipNoViews++;
+        else if (!S.eyeCopied[eye]) S.skipCopyFailed++;
         S.hudDrawnPair = S.hudDrawnPair || S.hudDrawn;
         // One acquire/release of the HUD swapchain per XR frame: some runtimes show every released
         // image immediately, so a second copy per pair made the HUD alternate between frames.
@@ -1365,7 +1556,7 @@ void OnPresent(IDirect3DDevice9* dev)
         else S.curEye = 1;
     }
 
-    PollEvents();
+    if (!S.xrapi) PollEvents();
     if (!S.anglesThisFrame) S.frameScope = S.gameZoomed = false; // no game camera (menu, loading)
     S.hudDrawn = false;
     S.anglesThisFrame = false;
@@ -1400,13 +1591,73 @@ void OnPresent(IDirect3DDevice9* dev)
     S.spyBestPrims = 0;
     S.spyCamFrame = false;
 
-    if (S.running && !S.frameOpen && S.ok && S.width)
+    if (S.xrapi)
+        XrApiBeginFrame();
+    else if (S.running && !S.frameOpen && S.ok && S.width)
         BeginPair();
+}
+
+bool HudOverlay(IDirect3DTexture9** tex, float verts[4][6])
+{
+    // XR API: no compositor layers, so the HUD panel is drawn into each eye image. Same pose as
+    // the OpenXR HUD layer (follows the game camera so markers sit on their targets).
+    if (!S.xrapi || !S.hudTex || !S.hudDrawn || !S.viewsValid || S.frameScope || S.xrSceneFrames < 2 || !S.width)
+        return false;
+    bool aiming = S.aimOn && S.bodyValid;
+    bool follow = !aiming || S.hudFollow;
+    Quat q = (follow && S.hudRelValid) ? Mul(S.refQ, S.hudRel) : S.refQ;
+    float scale = (aiming && S.hudFollow) ? S.hudFollowScale : g_cfg.hudScale;
+    float d = S.hudDistance;
+    Vec3 center = S.refP + Rotate(q, { 0, 0, -d });
+    float hw = d * S.gameTanX * scale, hh = d * S.gameTanY * scale;
+
+    const XrView& eye = S.views[S.curEye];
+    Quat inv = Conj(ToQuat(eye.pose.orientation));
+    Vec3 ep = ToVec(eye.pose.position);
+    float l = tanf(eye.fov.angleLeft), r = tanf(eye.fov.angleRight);
+    float u = tanf(eye.fov.angleUp), dn = tanf(eye.fov.angleDown);
+    const float corner[4][4] = { { -hw, hh, 0, 0 }, { hw, hh, 1, 0 }, { -hw, -hh, 0, 1 }, { hw, -hh, 1, 1 } };
+    for (int i = 0; i < 4; i++) {
+        Vec3 p = Rotate(inv, center + Rotate(q, { corner[i][0], corner[i][1], 0 }) - ep);
+        if (p.z > -0.01f) return false;     // behind the eye
+        float iz = 1.0f / -p.z;
+        float nx = (2 * p.x * iz - (r + l)) / (r - l);
+        float ny = (2 * p.y * iz - (u + dn)) / (u - dn);
+        verts[i][0] = (nx * 0.5f + 0.5f) * S.width - 0.5f;
+        verts[i][1] = (0.5f - ny * 0.5f) * S.height - 0.5f;
+        verts[i][2] = 0.0f;
+        verts[i][3] = iz;
+        verts[i][4] = corner[i][2];
+        verts[i][5] = corner[i][3];
+    }
+    *tex = S.hudTex;
+    return true;
+}
+
+bool MirrorFrameInfo(MirrorFrame* out)
+{
+    if (S.xrapi || !S.ok || !S.running || !S.frameOpen || !S.viewsValid) return false;
+    bool zoomed = S.frameScope && S.anglesThisFrame;
+    if (zoomed || S.frameSceneDraws < (unsigned)g_cfg.minSceneDraws) return false;
+    const XrFovf& f = S.views[S.curEye].fov;
+    out->eye = S.curEye;
+    out->left = tanf(-f.angleLeft);
+    out->right = tanf(f.angleRight);
+    out->up = tanf(f.angleUp);
+    out->down = tanf(-f.angleDown);
+    out->hud = S.hudDrawn;
+    return out->left > 0 && out->right > 0 && out->up > 0 && out->down > 0;
+}
+
+IDirect3DTexture9* HudTexture()
+{
+    if (S.hudTex) S.hudTex->AddRef();
+    return S.hudTex;
 }
 
 IDirect3DSurface9* HudSurface()
 {
-    if (!S.ok || !S.running || !S.frameOpen || !S.hudTex || !S.hud.handle) return nullptr;
+    if (!S.ok || !S.running || !S.frameOpen || !S.hudTex || (!S.hud.handle && !S.xrapi)) return nullptr;
     IDirect3DSurface9* s = nullptr;
     S.hudTex->GetSurfaceLevel(0, &s);
     return s;
@@ -1479,7 +1730,9 @@ bool SpyModelCandidate(const D3DMATRIX& world, unsigned prims)
     S.spyBestPrims = prims;
     S.spyBestOrigin = t;
     S.spyBestHeadValid = false;
-    return prims >= 300;    // the body (not a small part): worth reading its vertices
+    // The body (not a small part): worth reading its vertices. Under Wine that read stalls the
+    // renderer, so with the XR API only while the first-person view needs the head.
+    return prims >= 300 && (S.spyFpv || !S.xrapi);
 }
 
 void NoteSpyHead(Vec3 top)

@@ -8,6 +8,8 @@ namespace vr {
 // Returns false (and leaves the game in plain flat mode) if anything is missing.
 bool Init();
 bool Available();
+// Running on WinlatorXR's XR API (standalone headset): plain D3D9, no OpenXR / D3D9On12.
+bool UsesXrApi();
 IUnknown* D3D12Device();
 IUnknown* D3D12Queue();
 
@@ -24,7 +26,22 @@ bool EyeTransform(const D3DMATRIX& view, const D3DMATRIX& proj, D3DMATRIX* outVi
 
 // Render target for 2D drawing while VR is running (AddRef'd, caller releases), else nullptr.
 IDirect3DSurface9* HudSurface();
+// XR API: the HUD texture and its panel in the current eye image as 4 pretransformed vertices
+// (x, y, z, rhw, u, v; triangle strip) to draw into the backbuffer before Present.
+bool HudOverlay(IDirect3DTexture9** tex, float verts[4][6]);
 void NoteHudDrawn();
+
+// PC desktop window (for streaming): the eye this game frame renders and the tangents of its
+// field of view. False when the frame is not stereo gameplay (menus, zoom), which the window
+// shows as the game drew it.
+struct MirrorFrame {
+    int eye;
+    float left, right, up, down;
+    bool hud;           // this frame drew HUD
+};
+bool MirrorFrameInfo(MirrorFrame* out);
+// The HUD texture (AddRef'd, caller releases), or nullptr.
+IDirect3DTexture9* HudTexture();
 
 // World matrix that moves a first-person weapon (placed relative to the game camera) into the
 // right hand. False when aim mode or controller tracking is not active.

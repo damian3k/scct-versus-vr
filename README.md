@@ -30,7 +30,7 @@ For players: see [`USER_GUIDE.md`](USER_GUIDE.md) and [`controls.txt`](controls.
 
 ---
 
-## Status (v0.7)
+## Status (v0.8)
 
 Working (tested on Meta Quest 3 through Virtual Desktop, RTX 3090, online matches):
 
@@ -43,6 +43,11 @@ Working (tested on Meta Quest 3 through Virtual Desktop, RTX 3090, online matche
 - Spy first-person view (both stick clicks) — **experimental**, see known issues.
 - Dynamic lights, shadows and environment reflections stay fixed to the world; the skybox is
   rendered at infinity.
+- Volumetric light shafts (e.g. the sunbeams in Warehouse) and the merc's flashlight cone seen
+  from outside are in the right place in both eyes.
+- Spy camouflage suit: the see-through effect works in VR.
+- The PC window shows a steady view (the right eye) with the HUD, for streaming / people
+  watching (`DesktopMirror`).
 - HUD on its own OpenXR quad layer that follows the game camera, so objective markers sit on
   their targets; menus (main and in-game) on a flat virtual screen with menu controls.
 - Quest/Touch controllers mapped to keyboard/mouse (configurable, separate spy and menu sets,
@@ -64,7 +69,8 @@ Known issues / limitations:
   weapon.
 - The game (not the mod) occasionally crashes when leaving a match (heap error in Reloaded /
   MSVCR70, also seen without VR).
-- Android / WinlatorXR standalone port is parked (see `quest/`).
+- Standalone Quest version (WinlatorXR) is in progress and not released yet (see the Quest
+  section). Its code is in the same DLL but only switches on inside WinlatorXR.
 
 ---
 
@@ -75,11 +81,15 @@ src/            the mod (d3d9.dll proxy)
   dllmain.cpp     d3d9.dll exports, Direct3DCreate9 -> D3D9On12, ExitProcess hook, crash module log
   hooks.cpp       IDirect3DDevice9 vtable hooks: cameras, 2D/HUD routing, weapon, lights, dumps
   vr.cpp          OpenXR session, D3D12 interop, frame pairing, layers, aim loop, zoom, spy camera
-  input.cpp       OpenXR actions -> SendInput keyboard/mouse, menu / spy bindings, stick chord
+  input.cpp       OpenXR / XR API controllers -> keyboard/mouse, menu / spy bindings, stick chord
+  xrapi.cpp       WinlatorXR XR API client (Quest standalone: tracking packets in, VR mode out)
+  dihook.cpp      DirectInput8 wrapper that injects mouse input (Quest: Wine ignores SendInput)
+  rawinject.cpp   synthetic raw input messages (Quest fallback)
   config.cpp/.h   SCCT_VR.ini
   vrmath.h        small matrix/quaternion helpers (D3D row-vector convention)
   log.cpp/.h      SCCT_VR.log
 test/testapp.cpp  tiny D3D9 app that loads bin\d3d9.dll (smoke test without the game)
+tools/disasm_vs.py  disassembles vertex shaders saved by the frame dump (SCCT_VR_vs_*.bin)
 quest/          WinlatorXR experiment (vorbisfile.dll proxy + launcher), see below
 deps/openxr/    Khronos OpenXR loader 1.1.65, Win32 only (headers, .lib, .dll, LICENSE)
 SCCT_VR.ini     default configuration (every option is commented)
@@ -163,6 +173,17 @@ With the eye camera active the matrix is prefixed with `inverse(eyeView) × game
 (rotation only for normals / reflection vectors). The game's texture matrix is read back from the
 device on every draw (it often arrives through state blocks); if the device still holds the
 corrected matrix we wrote, the game has not changed it (`FixProjectedLights`).
+
+A few effects use vertex shaders: the volumetric light shafts, and the spy's camouflage (which
+renders the scene behind the spy into a helper texture and samples it with screen-projected
+coordinates). Their World×View×Projection matrices reach the shader constants without going
+through `SetVertexShaderConstantF`, so before each vertex-shader draw with the eye camera the
+constants are read back, every block that is `X × gameView × gameProj` with `X` a real 3D
+transform is replaced with `X × eyeView × eyeProj`, and the original constants are restored after
+the draw. Other constants (a shaft's size and colour sat right next to its matrix) are rejected by
+requiring a non-degenerate basis. Screen-space texture lookups (a camera-space texgen stage whose
+texture is a backbuffer-sized render target) get the eye's projection instead of the
+eye→game-camera conversion.
 
 ### Frame structure and the HUD
 Every gameplay frame looks like this (confirmed with frame dumps):
@@ -265,10 +286,13 @@ up `address - module base + 0x10000000`.
 - `System\SCCT_VR.log` — startup, runtime/headset info, eye FOVs, recenter, zoom / spy events and
   every 10 s statistics (game fps, XR pairs/s, draws, HUD draws, weapon draws, texgen
   corrections, learned mouse counts/degree, focus).
-- **Pause** key writes one frame's draw calls to `System\SCCT_VR_frame.txt` (render targets,
-  clears, cameras, projections, texture matrices, 2D textures, classification of each draw). One
-  frame is also dumped automatically ~20 s into gameplay, and one menu frame to
-  `SCCT_VR_menu.txt`.
+- **Pause** key writes one frame's draw calls to `System\SCCT_VR_frame_pause<N>.txt` (render
+  targets, clears, cameras, projections, blending, texture stages and matrices, vertex shader
+  constants, classification of each draw). One frame is also dumped automatically ~20 s into
+  gameplay (`SCCT_VR_frame.txt`), and one menu frame to `SCCT_VR_menu.txt`.
+- `DumpEverySec=N` writes a dump every N seconds of gameplay (`SCCT_VR_frame_auto1..20.txt`),
+  handy in VR where the keyboard is out of reach. Vertex shaders seen in a dump are saved as
+  `SCCT_VR_vs_<address>.bin`; `python tools\disasm_vs.py <file>` disassembles them.
 - `D3D12DebugLayer=1` enables the D3D12 debug layer.
 
 ---
@@ -300,6 +324,11 @@ and videos after every change:
    reflection texture matrices read back from the device.
 10. **Spy first person (experimental):** stick chord, eyes attached to the top of the head read
     from the CPU-skinned model, gear hidden, binocular eye calibration.
+11. **Shader effects (v0.8):** frame dumps extended with texture stages and shader constants,
+    shader bytecode disassembled: light shafts and the camouflage get their camera matrices
+    corrected per draw; a steady PC window (one eye + HUD) for streaming.
+12. **Quest standalone (in progress):** WinlatorXR's XR API backend, input through DirectInput
+    injection under Wine, the HUD drawn into the eye images, mono mode for performance.
 
 ---
 
@@ -319,20 +348,23 @@ merc weapon offsets per weapon, snap/smooth turn polish.
 
 ---
 
-## Quest / WinlatorXR experiment (`quest/`)
+## Quest standalone / WinlatorXR (`quest/`, in progress)
 
-Goal was a standalone APK. Findings so far:
+Goal: play on a Quest without a PC, from the player's own game files. Not released yet.
 
-- WinlatorXR runs the game, but Reloaded's launcher cannot inject into a suspended process under
-  Wine + FEX. `quest/vorbisproxy.cpp` is a `vorbisfile.dll` proxy (forwards to
-  `vorbisfile_orig.dll`) that loads `Reloaded.Core.dll` at startup instead; `quest/launcher.cpp`
-  (`SCCT_Quest.exe`) starts `SCCT Versus` directly and logs to `SCCT_Quest.log` (optional startup
-  debugger when `SCCT_Quest.debug` exists).
-- WinlatorXR's default DDraw wrapper (Dd7To9) crashes in a loop; use **WineD3D**.
-- With that, Reloaded loads and creates the device, but the game window disappears right after
-  device creation (both DXVK and WineD3D). Not solved.
-- This mod's D3D9On12 path does not exist under Wine; a VR port would need DXVK/Vulkan interop and
-  WinlatorXR's OpenXR-WXR runtime or XrAPI.
+- The game runs in WinlatorXR (Box64 + Proton 9 x86_64, DXVK, Turnip). Reloaded's launcher cannot
+  inject under Wine, so `quest/vorbisproxy.cpp` (a `vorbisfile.dll` proxy) loads
+  `Reloaded.Core.dll` at startup and `quest/launcher.cpp` (`SCCT_Quest.exe`) starts the game. The
+  proxy also blocks the game minimising itself under Wine. WinlatorXR's default DDraw wrapper
+  (Dd7To9) hangs the game: use **WineD3D**.
+- VR goes through WinlatorXR's **XR API** instead of OpenXR (`Backend=0` picks it automatically
+  inside WinlatorXR): head/controller poses arrive as UDP packets, frames are stamped with a sync
+  value and the eye in a corner pixel, and the mod tells the runtime when to show immersive VR
+  (gameplay) or a flat screen (menus, zoom). `XrApiStereo=0` (mono) shows every frame to both
+  eyes, which is much smoother on the Quest's CPU than alternating eyes.
+- The HUD has no layer of its own there, so it is drawn into each eye image as a panel.
+- Wine does not pass `SendInput` to the game: keys go in as window messages (plus
+  `GetKeyState` hooks), mouse motion through a DirectInput8 wrapper.
 
 ---
 

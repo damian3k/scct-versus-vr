@@ -2,6 +2,9 @@
 
 struct Config {
     bool  enabled = true;
+    int   backend = 0;                // 0 auto (WinlatorXR XR API when its container is detected, else OpenXR), 1 OpenXR, 2 XR API
+    float xrApiControllerRoll = 180.0f; // XR API controller orientation vs an OpenXR aim pose (degrees)
+    bool  xrApiStereo = true;         // XR API: 1 = stereo (alternate eyes), 0 = mono (every frame to both eyes)
     float worldScale = 100.0f;        // Unreal units per meter
     bool  ignoreGamePitch = true;     // keep the horizon level; head tracking supplies pitch/roll
     int   worldUpAxis = 2;            // 0=X 1=Y 2=Z (Unreal world is Z-up)
@@ -66,6 +69,8 @@ struct Config {
     float spyFpvHideRadius = 60.0f;   // draws whose origin is this close to the spy are its own model
     bool  spyFpvShowBody = true;      // keep drawing the body (hands, arms); only small gear is hidden
 
+    bool  desktopMirror = true;       // PC window during gameplay: left eye + HUD (for streaming) instead of alternating eyes
+    int   dumpEverySec = 0;           // diagnostics: write a frame dump every N seconds of gameplay (0 = off)
     bool  d3d12DebugLayer = false;
     int   statsIntervalSec = 10;
 };

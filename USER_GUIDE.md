@@ -5,7 +5,7 @@ with head tracking, aim the Mercenary's gun with your right controller and use Q
 controllers for everything else. Other players do not need the mod — you can play with people on
 a normal screen.
 
-Version 0.7 · Gameplay video: https://www.youtube.com/watch?v=nbMLmVTR_hc
+Version 0.8 · Gameplay video: https://www.youtube.com/watch?v=nbMLmVTR_hc
 
 ## Requirements
 
@@ -72,7 +72,7 @@ Keyboard keys while playing:
 | End | Controller aiming on/off |
 | Insert | HUD mode: follow the weapon ↔ fixed in front of you |
 | Num + / Num − | Bigger / smaller HUD (follow mode); the value is written to `SCCT_VR.log` |
-| Pause | Write a diagnostic frame dump (`SCCT_VR_frame.txt`) |
+| Pause | Write a diagnostic frame dump (`SCCT_VR_frame_pause1.txt`, `pause2`...) |
 
 ## How it plays
 
@@ -169,6 +169,7 @@ Every option is commented in the file. The most useful ones:
 | `MenuMouseSpeed` | 1500 | right-stick cursor speed in menus |
 | `WeaponOffsetX/Y/Z`, `WeaponPitch` | 10 / −15 / 20, 0 | position/tilt of the gun in your hand |
 | `FixProjectedLights` | 1 | keeps the flashlight and shadows fixed to the world |
+| `DesktopMirror` | 1 | PC window during gameplay: 1 = a steady view (right eye) with the HUD, for streaming / people watching; 0 = the raw headset frames (eyes alternate, no HUD) |
 
 ## Troubleshooting
 
@@ -179,8 +180,10 @@ Every option is commented in the file. The most useful ones:
 - **Choppy image:** raise `fps_merc` / `fps_spy` (see above).
 - **Game closes during a multiplayer match:** this was a bug in the mod, fixed in v0.7. If it
   still happens, send `SCCT_VR.log` and `SCCT_Versus_crash.log` to the mod author.
-- **Something looks wrong:** press Pause at that moment and send `SCCT_VR.log` and
-  `SCCT_VR_frame.txt` to the mod author.
+- **Something looks wrong:** press Pause at that moment and send `SCCT_VR.log` and the
+  `SCCT_VR_frame_pause*.txt` file to the mod author. In VR, where the keyboard is out of reach,
+  set `DumpEverySec=5` instead (a dump every 5 s, `SCCT_VR_frame_auto*.txt`) and set it back to 0
+  afterwards.
 - **Conflicts:** other mods that also use a `d3d9.dll` (e.g. ReShade for D3D9) cannot be used at the
   same time.
 

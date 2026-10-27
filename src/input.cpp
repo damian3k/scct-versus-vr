@@ -3,6 +3,8 @@
 
 #include "input.h"
 #include "log.h"
+#include "rawinject.h"
+#include "dihook.h"
 #include <cmath>
 #include <cstdio>
 #include <cwchar>
@@ -97,6 +99,7 @@ Bind g_tapUp[kCtlCount];       // tap waiting for its key-up
 DWORD g_tapUpTick[kCtlCount];
 int g_context = kCtxGame;
 DWORD g_pressTick[kCtlCount], g_repeatTick[kCtlCount];
+bool g_logSends;                // XR API: log the first injected inputs (diagnostics)
 Bind g_scopeKey;
 bool g_scopeUpPending;
 DWORD g_scopeUpTick;
@@ -179,8 +182,84 @@ void LoadBindings()
     g_scopeKey = Parse(buf);
 }
 
+// Keys held through window messages (XR API): the game also checks GetKeyState every frame and
+// lets go of keys that are not really down, so these report as down there.
+BYTE g_vkHeld[256];
+using GetKeyState_t = SHORT(WINAPI*)(int);
+GetKeyState_t oGetKeyState, oGetAsyncKeyState;
+
+SHORT WINAPI hkGetKeyState(int vk)
+{
+    SHORT r = oGetKeyState(vk);
+    if (vk >= 0 && vk < 256 && g_vkHeld[vk]) r |= (SHORT)0x8000;
+    return r;
+}
+
+SHORT WINAPI hkGetAsyncKeyState(int vk)
+{
+    SHORT r = oGetAsyncKeyState(vk);
+    if (vk >= 0 && vk < 256 && g_vkHeld[vk]) r |= (SHORT)0x8000;
+    return r;
+}
+
+void SetHeld(UINT vk, bool down)
+{
+    if (vk >= 256) return;
+    g_vkHeld[vk] = down;
+    // The generic modifier codes follow their left/right variants.
+    if (vk == VK_LSHIFT || vk == VK_RSHIFT) g_vkHeld[VK_SHIFT] = g_vkHeld[VK_LSHIFT] | g_vkHeld[VK_RSHIFT];
+    if (vk == VK_LCONTROL || vk == VK_RCONTROL) g_vkHeld[VK_CONTROL] = g_vkHeld[VK_LCONTROL] | g_vkHeld[VK_RCONTROL];
+    if (vk == VK_LMENU || vk == VK_RMENU) g_vkHeld[VK_MENU] = g_vkHeld[VK_LMENU] | g_vkHeld[VK_RMENU];
+}
+
+// Under Wine (WinlatorXR) injected input does not reach the game: keys go to its window as
+// messages, the mouse to its DirectInput mouse (dihook.cpp) or Reloaded's raw input.
+bool SendRaw(const Bind& b, bool down)
+{
+    if (!rawinject::Active()) return false;
+    static const USHORT downFlags[] = { 0, RI_MOUSE_LEFT_BUTTON_DOWN, RI_MOUSE_RIGHT_BUTTON_DOWN, RI_MOUSE_MIDDLE_BUTTON_DOWN };
+    static const USHORT upFlags[] = { 0, RI_MOUSE_LEFT_BUTTON_UP, RI_MOUSE_RIGHT_BUTTON_UP, RI_MOUSE_MIDDLE_BUTTON_UP };
+    switch (b.kind) {
+    case Kind::Key: {
+        // The game reads the keyboard from its window messages (Reloaded reads only the mouse
+        // with raw input, and the game's DirectInput devices are mouse and gamepads), so the key
+        // goes straight to the game window as WM_KEYDOWN / WM_KEYUP.
+        UINT vk = MapVirtualKeyW(b.scan | (b.extended ? 0xE000 : 0), MAPVK_VSC_TO_VK_EX);
+        bool sys = vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU || vk == VK_F10;
+        LPARAM lp = 1 | ((LPARAM)b.scan << 16) | (b.extended ? (1 << 24) : 0) | (down ? 0 : (3u << 30));
+        UINT msg = down ? (sys ? WM_SYSKEYDOWN : WM_KEYDOWN) : (sys ? WM_SYSKEYUP : WM_KEYUP);
+        SetHeld(vk, down);
+        // Key messages carry the generic modifier codes (as Windows sends them).
+        UINT msgVk = vk;
+        if (vk == VK_LSHIFT || vk == VK_RSHIFT) msgVk = VK_SHIFT;
+        else if (vk == VK_LCONTROL || vk == VK_RCONTROL) msgVk = VK_CONTROL;
+        else if (vk == VK_LMENU || vk == VK_RMENU) msgVk = VK_MENU;
+        if (g_wnd) PostMessageW(g_wnd, msg, msgVk, lp);
+        break;
+    }
+    case Kind::Mouse:
+        if (dihook::MouseActive()) dihook::MouseButton(b.button - 1, down);
+        else rawinject::Mouse(0, 0, down ? downFlags[b.button] : upFlags[b.button], 0);
+        break;
+    case Kind::Wheel:
+        if (!down) break;
+        if (dihook::MouseActive()) dihook::MouseMove(0, 0, b.wheel);
+        else rawinject::Mouse(0, 0, 0, (short)b.wheel);
+        break;
+    default: return true;
+    }
+    static unsigned logged;
+    if (g_logSends && logged < 30) {
+        logged++;
+        Log("Raw input %s %s (scan 0x%X button %d wheel %d)", b.kind == Kind::Key ? "key" : "mouse",
+            down ? "down" : "up", b.scan, b.button, b.wheel);
+    }
+    return true;
+}
+
 void SendKey(const Bind& b, bool down)
 {
+    if (SendRaw(b, down)) return;
     INPUT in = {};
     switch (b.kind) {
     case Kind::Key:
@@ -204,7 +283,13 @@ void SendKey(const Bind& b, bool down)
     default:
         return;
     }
-    SendInput(1, &in, sizeof(in));
+    UINT sent = SendInput(1, &in, sizeof(in));
+    static unsigned logged;
+    if (g_logSends && logged < 30) {
+        logged++;
+        Log("SendInput %s %s (scan 0x%X button %d wheel %d) -> %u%s", in.type == INPUT_KEYBOARD ? "key" : "mouse",
+            down ? "down" : "up", b.scan, b.button, b.wheel, sent, sent ? "" : " FAILED");
+    }
 }
 
 XrPath Path(const char* s)
@@ -380,6 +465,12 @@ void TapScopeKey()
 void SendMouseMove(int dx, int dy)
 {
     if (!dx && !dy) return;
+    if (rawinject::Active()) {
+        // The game turns its camera with its DirectInput mouse; Reloaded's raw input otherwise.
+        if (dihook::MouseActive()) dihook::MouseMove(dx, dy, 0);
+        else rawinject::Mouse(dx, dy, 0, 0);
+        return;
+    }
     INPUT in = {};
     in.type = INPUT_MOUSE;
     in.mi.dx = dx;
@@ -410,15 +501,36 @@ void Fire(const Bind& b, bool down, Controls* out)
     else SendKey(b, down);
 }
 
+namespace {
+
+// Controller state as read from OpenXR or from WinlatorXR's XR API.
+struct Raw {
+    XrVector2f move = {}, look = {};
+    float trigL = 0, trigR = 0, gripL = 0, gripR = 0;
+    bool a = false, b = false, x = false, y = false, clickL = false, clickR = false, menu = false;
+    bool aimValid = false;
+    XrPosef aim = {};
+};
+
+void Process(const Raw& r, bool rightStickButtons, bool menuMode, bool spyMode, Controls* out);
+
+// Tap of the zoom key still waiting for its key-up.
+void ScopeKeyUp()
+{
+    if (g_scopeUpPending && GetTickCount() >= g_scopeUpTick) {
+        SendKey(g_scopeKey, false);
+        g_scopeUpPending = false;
+    }
+}
+
+} // namespace
+
 void Update(XrSession session, XrSpace localSpace, XrTime time, bool focused, bool rightStickButtons, bool menuMode,
             bool spyMode, Controls* out)
 {
     *out = Controls();
     if (!g_ok) return;
-    if (g_scopeUpPending && GetTickCount() >= g_scopeUpTick) {
-        SendKey(g_scopeKey, false);
-        g_scopeUpPending = false;
-    }
+    ScopeKeyUp();
 
     XrActiveActionSet active = { g_set, XR_NULL_PATH };
     XrActionsSyncInfo si{ XR_TYPE_ACTIONS_SYNC_INFO };
@@ -429,20 +541,116 @@ void Update(XrSession session, XrSpace localSpace, XrTime time, bool focused, bo
         return;
     }
 
-    XrVector2f move = GetVec2(session, g_move);
-    XrVector2f look = GetVec2(session, g_look);
+    Raw r;
+    r.move = GetVec2(session, g_move);
+    r.look = GetVec2(session, g_look);
+    r.trigL = GetFloat(session, g_trigL);
+    r.trigR = GetFloat(session, g_trigR);
+    r.gripL = GetFloat(session, g_gripL);
+    r.gripR = GetFloat(session, g_gripR);
+    r.a = GetBool(session, g_a);
+    r.b = GetBool(session, g_b);
+    r.x = GetBool(session, g_x);
+    r.y = GetBool(session, g_y);
+    r.clickL = GetBool(session, g_clickL);
+    r.clickR = GetBool(session, g_clickR);
+    r.menu = GetBool(session, g_menu);
+    XrSpaceLocation loc{ XR_TYPE_SPACE_LOCATION };
+    if (XR_SUCCEEDED(xrLocateSpace(g_aimSpace, localSpace, time, &loc)) &&
+        (loc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) &&
+        (loc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) {
+        r.aimValid = true;
+        r.aim = loc.pose;
+    }
+    Process(r, rightStickButtons, menuMode, spyMode, out);
+}
+
+void InstallKeyStateHooks()
+{
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    oGetKeyState = (GetKeyState_t)GetProcAddress(user32, "GetKeyState");
+    oGetAsyncKeyState = (GetKeyState_t)GetProcAddress(user32, "GetAsyncKeyState");
+    int a = rawinject::PatchAllImports((FARPROC)oGetKeyState, (void*)hkGetKeyState);
+    int b = rawinject::PatchAllImports((FARPROC)oGetAsyncKeyState, (void*)hkGetAsyncKeyState);
+    Log("Key state hooks: GetKeyState in %d, GetAsyncKeyState in %d import(s)", a, b);
+}
+
+void InitXrApi()
+{
+    LoadBindings();
+    g_logSends = true;
+    Log("Controller input ready (XR API)");
+}
+
+void UpdateXrApi(const xrapi::Packet& p, bool focused, bool rightStickButtons, bool menuMode, bool spyMode,
+                 float controllerRoll, Controls* out)
+{
+    *out = Controls();
+    ScopeKeyUp();
+    // Button order of the XR API packet: L_GRIP L_MENU L_STICK L_LEFT L_RIGHT L_UP L_DOWN
+    // L_TRIGGER X Y A B R_GRIP R_STICK R_LEFT R_RIGHT R_UP R_DOWN R_TRIGGER
+    const bool* b = p.buttons;
+    {
+        // Diagnostics: the first changes of the controller state as received.
+        static char last[20];
+        static unsigned logged;
+        char now[20];
+        for (int i = 0; i < 19; i++) now[i] = b[i] ? 'T' : 'F';
+        now[19] = 0;
+        bool sticks = fabsf(p.leftStick[0]) + fabsf(p.leftStick[1]) + fabsf(p.rightStick[0]) + fabsf(p.rightStick[1]) > 0.3f;
+        if ((strcmp(now, last) || sticks) && logged < 40) {
+            logged++;
+            Log("XrAPI input: buttons %s sticks %.2f %.2f / %.2f %.2f, game window focused %d", now, p.leftStick[0],
+                p.leftStick[1], p.rightStick[0], p.rightStick[1], focused);
+            memcpy(last, now, sizeof(now));
+        }
+    }
+    if (!focused) {
+        ReleaseAll();
+        return;
+    }
+    Raw r;
+    r.move = { p.leftStick[0], p.leftStick[1] };
+    r.look = { p.rightStick[0], p.rightStick[1] };
+    r.gripL = b[0] ? 1.0f : 0.0f;
+    r.menu = b[1];
+    r.clickL = b[2];
+    r.trigL = b[7] ? 1.0f : 0.0f;
+    r.x = b[8];
+    r.y = b[9];
+    r.a = b[10];
+    r.b = b[11];
+    r.gripR = b[12] ? 1.0f : 0.0f;
+    r.clickR = b[13];
+    r.trigR = b[18] ? 1.0f : 0.0f;
+    // The XR API's controller orientation is rolled compared to an OpenXR aim pose.
+    float h = controllerRoll * 0.5f / 57.29578f;
+    float qx = p.rightQ[0], qy = p.rightQ[1], qz = p.rightQ[2], qw = p.rightQ[3];
+    float rz = sinf(h), rw = cosf(h);   // q * (0, 0, sin, cos): roll about the controller's own Z
+    r.aim.orientation = { qx * rw + qy * rz, qy * rw - qx * rz, qz * rw + qw * rz, qw * rw - qz * rz };
+    r.aim.position = { p.rightPos[0], p.rightPos[1], p.rightPos[2] };
+    float len = qx * qx + qy * qy + qz * qz + qw * qw;
+    r.aimValid = len > 0.5f && len < 1.5f;
+    Process(r, rightStickButtons, menuMode, spyMode, out);
+}
+
+namespace {
+
+void Process(const Raw& r, bool rightStickButtons, bool menuMode, bool spyMode, Controls* out)
+{
+    const XrVector2f move = r.move, look = r.look;
     bool state[kCtlCount];
-    state[kLeftTrigger] = Threshold(GetFloat(session, g_trigL), g_held[kLeftTrigger]);
-    state[kRightTrigger] = Threshold(GetFloat(session, g_trigR), g_held[kRightTrigger]);
-    state[kLeftGrip] = Threshold(GetFloat(session, g_gripL), g_held[kLeftGrip]);
-    state[kRightGrip] = Threshold(GetFloat(session, g_gripR), g_held[kRightGrip]);
-    state[kA] = GetBool(session, g_a);
-    state[kB] = GetBool(session, g_b);
-    state[kX] = GetBool(session, g_x);
-    state[kY] = GetBool(session, g_y);
-    state[kLeftClick] = GetBool(session, g_clickL);
-    state[kRightClick] = GetBool(session, g_clickR);
-    state[kMenu] = GetBool(session, g_menu);
+    state[kLeftTrigger] = Threshold(r.trigL, g_held[kLeftTrigger]);
+    state[kRightTrigger] = Threshold(r.trigR, g_held[kRightTrigger]);
+    state[kLeftGrip] = Threshold(r.gripL, g_held[kLeftGrip]);
+    state[kRightGrip] = Threshold(r.gripR, g_held[kRightGrip]);
+    state[kA] = r.a;
+    state[kB] = r.b;
+    state[kX] = r.x;
+    state[kY] = r.y;
+    state[kLeftClick] = r.clickL;
+    state[kRightClick] = r.clickR;
+    state[kMenu] = r.menu;
     state[kLeftUp] = Threshold(move.y, g_held[kLeftUp], 0.5f, 0.35f);
     state[kLeftDown] = Threshold(-move.y, g_held[kLeftDown], 0.5f, 0.35f);
     state[kLeftLeft] = Threshold(-move.x, g_held[kLeftLeft], 0.5f, 0.35f);
@@ -569,14 +777,10 @@ void Update(XrSession session, XrSpace localSpace, XrTime time, bool focused, bo
     out->lookY = Deadzone(look.y, 0.15f);
     out->moveX = move.x;
     out->moveY = move.y;
-
-    XrSpaceLocation loc{ XR_TYPE_SPACE_LOCATION };
-    if (XR_SUCCEEDED(xrLocateSpace(g_aimSpace, localSpace, time, &loc)) &&
-        (loc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) &&
-        (loc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) {
-        out->aimValid = true;
-        out->aim = loc.pose;
-    }
+    out->aimValid = r.aimValid;
+    out->aim = r.aim;
 }
+
+} // namespace
 
 } // namespace input

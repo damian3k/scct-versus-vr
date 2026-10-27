@@ -15,7 +15,7 @@ if not exist bin mkdir bin
 cl /nologo /O2 /MT /EHsc /std:c++17 /W3 /DNOMINMAX /DWIN32_LEAN_AND_MEAN ^
    /I deps\openxr\include src\*.cpp /LD /Fo:obj\ /Fe:bin\d3d9.dll ^
    /link /DEF:src\d3d9.def /SAFESEH:NO ^
-   deps\openxr\Win32\lib\openxr_loader.lib d3d12.lib dxgi.lib user32.lib delayimp.lib ^
+   deps\openxr\Win32\lib\openxr_loader.lib d3d12.lib dxgi.lib user32.lib ws2_32.lib delayimp.lib ^
    /DELAYLOAD:openxr_loader.dll || exit /b 1
 
 copy /y deps\openxr\Win32\bin\openxr_loader.dll bin\ >nul

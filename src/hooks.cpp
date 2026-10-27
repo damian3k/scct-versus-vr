@@ -117,6 +117,11 @@ struct DevState {
     // projectors): the game builds texture matrices for its own camera space, so with the eye
     // camera they must be prefixed with eye-space -> game-camera-space.
     D3DMATRIX eyeToGame = Identity();       // inv(eye view) * game view
+    // Screen-space lookups (the spy's camouflage samples a copy of the rendered image at the
+    // pixel behind it): the image is the eye's, so the game's projection in the texture matrix
+    // is swapped for the eye's: eye proj * inv(game proj).
+    D3DMATRIX screenFix = Identity();
+    bool screenFixValid = false;
     D3DMATRIX texT[8];                       // texture matrices as set by the game
     bool texTSet[8] = {};
     DWORD texCI[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };   // D3DTSS_TEXCOORDINDEX
@@ -138,6 +143,10 @@ struct DevState {
     bool menuPanelSeen = false;   // in-game menu background drawn this frame
     float cursorX = 0, cursorY = 0, menuW = 0, menuH = 0;
     IDirect3DStateBlock9* laserState = nullptr;
+    IDirect3DStateBlock9* hudState = nullptr;
+    IDirect3DTexture9* mirrorTex = nullptr;  // desktop window image during gameplay (left eye + HUD)
+    bool mirrorValid = false;
+    LONGLONG hookDrawTicks = 0, driverDrawTicks = 0, hookTransformTicks = 0;
     // frame dump
     FILE* dump = nullptr;
     int dumpLines = 0;
@@ -154,7 +163,7 @@ struct DevState {
 
 void Dump(const char* fmt, ...)
 {
-    if (!D.dump || D.dumpLines > 4000) return;
+    if (!D.dump || D.dumpLines > 20000) return;
     va_list ap;
     va_start(ap, fmt);
     vfprintf(D.dump, fmt, ap);
@@ -204,8 +213,10 @@ void Apply(IDirect3DDevice9* dev)
             D.vpValid = Inverse(Mul(D.view, D.proj), &D.vpInv);
             D.vpNew = Mul(v, p);
         }
-        D3DMATRIX eyeInv;
+        D3DMATRIX eyeInv, projInv;
         D.eyeToGame = Inverse(v, &eyeInv) ? Mul(eyeInv, D.view) : Identity();
+        D.screenFixValid = Inverse(D.proj, &projInv);
+        if (D.screenFixValid) D.screenFix = Mul(p, projInv);
     }
     if (D.haveView) oSetTransform(dev, D3DTS_VIEW, &v);
     if (D.haveProj) oSetTransform(dev, D3DTS_PROJECTION, &p);
@@ -217,6 +228,13 @@ bool FixWvp(D3DMATRIX& m)
     if (IsAffine(m, 1e-4f)) return false;
     D3DMATRIX x = Mul(m, D.vpInv);
     if (!IsAffine(x, g_cfg.shaderMatrixTolerance)) return false;
+    // A world transform has a real 3D basis. Other constants that happen to pass the affine
+    // test (a scale vector next to a colour, rows of zeros) give a flat one: not a matrix.
+    // Compared with the rows' lengths, so the test does not depend on the values' scale.
+    float det = x._11 * (x._22 * x._33 - x._23 * x._32) - x._12 * (x._21 * x._33 - x._23 * x._31) +
+                x._13 * (x._21 * x._32 - x._22 * x._31);
+    float lengths = Length(Row(x, 0)) * Length(Row(x, 1)) * Length(Row(x, 2));
+    if (!(lengths > 0.0f) || fabsf(det) < 0.1f * lengths) return false;
     x.m[0][3] = x.m[1][3] = x.m[2][3] = 0.0f;
     x._44 = 1.0f;
     m = Mul(x, D.vpNew);
@@ -233,6 +251,12 @@ void PrintStats()
         D.viewSets / (float)f, D.projSets / (float)f, D.stereoApplies / (float)f, D.shaderUploads / (float)f, D.shaderFixes / (float)f,
         D.draws / (float)f, D.hudDraws / (float)f, D.fullscreen2D / (float)f, D.weaponDraws / (float)f);
     Log("Device stats per frame: camera-space texgen corrected %.1f, PS constant uploads %.1f", D.texgenFixes / (float)f, D.psUploads / (float)f);
+    LARGE_INTEGER freq;
+    QueryPerformanceFrequency(&freq);
+    double ms = 1000.0 / freq.QuadPart / f;
+    Log("Time per frame: mod draw hooks %.2f ms (game draw calls inside them %.2f ms), transform hooks %.2f ms",
+        (D.hookDrawTicks - D.driverDrawTicks) * ms, D.driverDrawTicks * ms, D.hookTransformTicks * ms);
+    D.hookDrawTicks = D.driverDrawTicks = D.hookTransformTicks = 0;
     D.texgenFixes = D.psUploads = 0;
     D.frames = D.viewSets = D.projSets = D.stereoApplies = D.shaderFixes = D.shaderUploads = D.draws = D.hudDraws = 0;
     D.fullscreen2D = D.weaponDraws = 0;
@@ -443,6 +467,82 @@ bool Stage0IsRenderTarget(IDirect3DDevice9* dev)
     return rt;
 }
 
+const char* MatchGameMatrix(const float* r);
+
+// Frame dump: render target, blending, texture stages and vertex shader matrices of a 3D draw
+// (to find effects drawn with the game's camera instead of the eye's).
+void DumpDrawDetails(IDirect3DDevice9* dev)
+{
+    IDirect3DSurface9* rt = nullptr;
+    D3DSURFACE_DESC rd = {};
+    if (SUCCEEDED(oGetRenderTarget(dev, 0, &rt)) && rt) { rt->GetDesc(&rd); rt->Release(); }
+    DWORD ab = 0, sb = 0, db = 0, zw = 0, zf = 0;
+    dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &ab);
+    dev->GetRenderState(D3DRS_SRCBLEND, &sb);
+    dev->GetRenderState(D3DRS_DESTBLEND, &db);
+    dev->GetRenderState(D3DRS_ZWRITEENABLE, &zw);
+    dev->GetRenderState(D3DRS_ZFUNC, &zf);
+    Dump("    rt=%p %ux%u fmt=%d blend=%lu %lu/%lu zwrite=%lu zfunc=%lu stereo=%d",
+         rt, rd.Width, rd.Height, rd.Format, ab, sb, db, zw, zf, D.stereoNow);
+    for (DWORD s = 0; s < 4; s++) {
+        DWORD op = D3DTOP_DISABLE, ci = 0, ff = 0;
+        dev->GetTextureStageState(s, D3DTSS_COLOROP, &op);
+        if (op == D3DTOP_DISABLE) break;
+        dev->GetTextureStageState(s, D3DTSS_TEXCOORDINDEX, &ci);
+        dev->GetTextureStageState(s, D3DTSS_TEXTURETRANSFORMFLAGS, &ff);
+        IDirect3DBaseTexture9* t = nullptr;
+        D3DSURFACE_DESC td = {};
+        int type = 0;
+        if (SUCCEEDED(dev->GetTexture(s, &t)) && t) {
+            type = t->GetType();
+            if (type == D3DRTYPE_TEXTURE) static_cast<IDirect3DTexture9*>(t)->GetLevelDesc(0, &td);
+            t->Release();
+        }
+        Dump("    stage%lu op=%lu tex=%p type=%d %ux%u fmt=%d%s tci=0x%lX ttff=0x%lX", s, op, t, type, td.Width, td.Height,
+             td.Format, (td.Usage & D3DUSAGE_RENDERTARGET) ? " RT" : "", ci, ff);
+        if ((ff & 0xFF) != D3DTTFF_DISABLE) {
+            D3DMATRIX m;
+            if (SUCCEEDED(oGetTransform(dev, (D3DTRANSFORMSTATETYPE)(D3DTS_TEXTURE0 + s), &m)))
+                Dump("      texmatrix %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f",
+                     m._11, m._12, m._13, m._14, m._21, m._22, m._23, m._24, m._31, m._32, m._33, m._34, m._41, m._42, m._43, m._44);
+        }
+    }
+    if (D.vsBound) {
+        IDirect3DVertexShader9* vs = nullptr;
+        dev->GetVertexShader(&vs);
+        if (vs) vs->Release();
+        // The shader's bytecode, once per shader, for offline disassembly.
+        static IDirect3DVertexShader9* saved[64];
+        static int savedCount = 0;
+        bool known = false;
+        for (int i = 0; i < savedCount; i++) known |= saved[i] == vs;
+        UINT size = 0;
+        if (vs && !known && savedCount < 64 && SUCCEEDED(vs->GetFunction(nullptr, &size)) && size && size < 65536) {
+            saved[savedCount++] = vs;
+            BYTE* code = new BYTE[size];
+            if (SUCCEEDED(vs->GetFunction(code, &size))) {
+                wchar_t path[MAX_PATH];
+                swprintf_s(path, L"%sSCCT_VR_vs_%p.bin", ModuleDir(), vs);
+                FILE* f = _wfsopen(path, L"wb", _SH_DENYWR);
+                if (f) { fwrite(code, 1, size, f); fclose(f); }
+            }
+            delete[] code;
+        }
+        float c[96 * 4];
+        if (SUCCEEDED(dev->GetVertexShaderConstantF(0, c, 96))) {
+            Dump("      vs=%p", vs);
+            for (int r = 0; r < 96; r++) {
+                if (r >= 16 && !c[r * 4] && !c[r * 4 + 1] && !c[r * 4 + 2] && !c[r * 4 + 3]) continue;
+                Dump("      c%d = %.4f %.4f %.4f %.4f", r, c[r * 4], c[r * 4 + 1], c[r * 4 + 2], c[r * 4 + 3]);
+            }
+            for (UINT i = 0; i + 4 <= 32; i++) {
+                const char* match = MatchGameMatrix(c + i * 4);
+                if (match) Dump("      c%u..c%u = %s (game camera, not corrected)", i, i + 3, match);
+            }
+        }
+    }
+}
+
 // Decides where a draw goes: HUD layer, scene, or scene with the weapon moved to the hand.
 // Returns true for a first-person weapon draw.
 bool RouteDraw(IDirect3DDevice9* dev, const DrawInfo& di)
@@ -487,7 +587,9 @@ bool RouteDraw(IDirect3DDevice9* dev, const DrawInfo& di)
     // the frame. Any later 2D draw means the candidate was not the cursor.
     bool rhw2D = is2D && D.rtIsBB && (D.fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW;
     if (rhw2D) D.twoDCount++;   // only pretransformed 2D counts: the in-game HUD after it uses another format
-    if (rhw2D && (!vr::SceneActive() || di.numVertices <= 6) && di.numVertices <= 1024) {
+    // (Under Wine reading a vertex buffer back stalls the renderer, so with the XR API the cursor
+    // is only looked for in menus, not over gameplay.)
+    if (rhw2D && (!vr::SceneActive() || (di.numVertices <= 6 && !vr::UsesXrApi())) && di.numVertices <= 1024) {
         float box[4];
         if (ScreenCoverage(dev, di, true, box) >= 0.0f && box[2] >= box[0]) {
             float w = box[2] - box[0], h = box[3] - box[1];
@@ -534,8 +636,25 @@ bool RouteDraw(IDirect3DDevice9* dev, const DrawInfo& di)
              di.kind, di.primCount, di.numVertices, D.fvf, D.vsBound, D.haveProj && IsPerspective(D.proj), D.rtIsBB,
              D.tex0W, D.tex0H, D.stage0IsRT ? "RT" : "", D.zClears, Length(t - D.camPos), cover, box[0], box[1], box[2], box[3],
              hud ? "HUD" : weapon ? "WEAPON" : is2D ? "scene-2D " : "scene", why);
+        if (!is2D) DumpDrawDetails(dev);
     }
     return weapon;
+}
+
+// The stage's texture is a render target of the backbuffer's size: a copy of the screen image
+// (shadow maps and projected light textures have their own sizes).
+bool StageSamplesScreen(IDirect3DDevice9* dev, DWORD stage)
+{
+    IDirect3DBaseTexture9* t = nullptr;
+    if (FAILED(dev->GetTexture(stage, &t)) || !t) return false;
+    bool screen = false;
+    if (t->GetType() == D3DRTYPE_TEXTURE) {
+        D3DSURFACE_DESC d;
+        if (SUCCEEDED(static_cast<IDirect3DTexture9*>(t)->GetLevelDesc(0, &d)))
+            screen = (d.Usage & D3DUSAGE_RENDERTARGET) && d.Width == D.bbW && d.Height == D.bbH;
+    }
+    t->Release();
+    return screen;
 }
 
 bool IsCameraSpaceTexgen(DWORD ci)
@@ -589,12 +708,60 @@ void FixCameraSpaceTexgen(IDirect3DDevice9* dev)
         D3DMATRIX m = D.eyeToGame;
         if ((ci & 0xFFFF0000) != D3DTSS_TCI_CAMERASPACEPOSITION)
             m._41 = m._42 = m._43 = 0.0f;   // normals / reflection vectors: rotation only
+        else if (D.screenFixValid && StageSamplesScreen(dev, i))
+            m = D.screenFix;
         D3DMATRIX t = Mul(m, D.texT[i]);
         oSetTransform(dev, (D3DTRANSFORMSTATETYPE)(D3DTS_TEXTURE0 + i), &t);
         D.texApplied[i] = t;
         D.texFixed[i] = true;
         D.texgenFixes++;
     }
+}
+
+bool FixWvp(D3DMATRIX& m);
+const UINT kVsConsts = 96;      // vs_1_1 constant registers
+
+// Before a vertex shader draw with the eye camera: rewrites every World*View*Proj in the
+// shader's constants (as the game put them on the device) for the eye. `orig` receives the
+// constants to put back after the draw. False if nothing needed changing.
+bool FixShaderConstantsForDraw(IDirect3DDevice9* dev, float* orig)
+{
+    if (!D.stereoNow || !D.vsBound || !D.vpValid || !g_cfg.fixShaderMatrices) return false;
+    if (FAILED(dev->GetVertexShaderConstantF(0, orig, kVsConsts))) return false;
+    float buf[kVsConsts * 4];
+    memcpy(buf, orig, sizeof(buf));
+    unsigned fixes = 0;
+    for (UINT i = 0; i + 4 <= kVsConsts; i++) {
+        float* r = &buf[i * 4];
+        D3DMATRIX m;
+        for (int a = 0; a < 4; a++)
+            for (int b = 0; b < 4; b++)
+                m.m[a][b] = r[b * 4 + a];
+        bool fixed = FixWvp(m);
+        if (fixed) {
+            for (int a = 0; a < 4; a++)
+                for (int b = 0; b < 4; b++)
+                    r[b * 4 + a] = m.m[a][b];
+        } else {
+            memcpy(&m, r, sizeof(m));
+            fixed = FixWvp(m);
+            if (fixed) memcpy(r, &m, sizeof(m));
+        }
+        if (fixed) {
+            if (D.dump) Dump("      c%u..c%u = WVP of the game camera -> corrected for the eye", i, i + 3);
+            fixes++;
+            i += 3;
+        }
+    }
+    if (!fixes) return false;
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        Log("Vertex shader draw: %u game-camera matrices corrected in its constants", fixes);
+    }
+    D.shaderFixes += fixes;
+    oSetVSConstF(dev, 0, buf, kVsConsts);
+    return true;
 }
 
 // FVF and vertex shader can also come from state blocks: read the device's current values.
@@ -609,9 +776,32 @@ void RefreshDrawState(IDirect3DDevice9* dev)
     }
 }
 
+// Time spent in the mod's own code (the game's draw calls themselves excluded), for the
+// statistics: under emulation (standalone headsets) every hook costs noticeably.
+struct HookTimer {
+    LARGE_INTEGER start;
+    LONGLONG* total;
+    explicit HookTimer(LONGLONG* t) : total(t) { QueryPerformanceCounter(&start); }
+    ~HookTimer()
+    {
+        LARGE_INTEGER end;
+        QueryPerformanceCounter(&end);
+        *total += end.QuadPart - start.QuadPart;
+    }
+};
+
 template <class F>
-HRESULT DoDraw(IDirect3DDevice9* dev, const DrawInfo& di, F draw)
+HRESULT DoDraw(IDirect3DDevice9* dev, const DrawInfo& di, F drawCall)
 {
+    HookTimer timer(&D.hookDrawTicks);
+    auto draw = [&]() {
+        LARGE_INTEGER a, b;
+        QueryPerformanceCounter(&a);
+        HRESULT h = drawCall();
+        QueryPerformanceCounter(&b);
+        D.driverDrawTicks += b.QuadPart - a.QuadPart;
+        return h;
+    };
     RefreshDrawState(dev);
     if (D.stereoNow && !Is2D()) {
         // Spy: find its model (and the top of its head) and, in first person, do not draw it.
@@ -622,15 +812,23 @@ HRESULT DoDraw(IDirect3DDevice9* dev, const DrawInfo& di, F draw)
         if (vr::HideDraw(D.world, di.primCount)) return D3D_OK;
     }
     FixCameraSpaceTexgen(dev);
+    bool weapon = RouteDraw(dev, di);
+    // Vertex shader draws (the spy's camouflage): the game's matrices reach the shader constants
+    // without passing the SetVertexShaderConstantF hook, so they are corrected for this draw only.
+    float vsOrig[kVsConsts * 4];
+    bool vsFixed = FixShaderConstantsForDraw(dev, vsOrig);
+    HRESULT hr;
     D3DMATRIX moved;
-    if (RouteDraw(dev, di) && vr::WeaponWorld(D.world, D.view, &moved)) {
+    if (weapon && vr::WeaponWorld(D.world, D.view, &moved)) {
         oSetTransform(dev, D3DTS_WORLD, &moved);
-        HRESULT hr = draw();
+        hr = draw();
         oSetTransform(dev, D3DTS_WORLD, &D.world);
         D.weaponDraws++;
-        return hr;
+    } else {
+        hr = draw();
     }
-    return draw();
+    if (vsFixed) oSetVSConstF(dev, 0, vsOrig, kVsConsts);
+    return hr;
 }
 
 UINT VertexCount(D3DPRIMITIVETYPE type, UINT prims)
@@ -654,8 +852,34 @@ void FrameDumpControl()
         Log("Frame dump written");
     }
     bool key = (GetAsyncKeyState(VK_PAUSE) & 0x8000) != 0;
-    if (key && !D.dumpKeyDown) D.dumpRequested = true;
+    if (key && !D.dumpKeyDown) {
+        // Each Pause press gets its own file, so several situations can be captured in one game.
+        static wchar_t name[64];
+        static int presses = 0;
+        swprintf_s(name, L"SCCT_VR_frame_pause%d.txt", ++presses);
+        D.dumpName = name;
+        D.dumpRequested = true;
+        Log("Frame dump requested (Pause): %ls", name);
+    }
     D.dumpKeyDown = key;
+    // Diagnostics: a dump every DumpEverySec seconds of gameplay, numbered 1..20 and reused.
+    static unsigned lastStereoFrames = 0;
+    bool gameplayFrame = D.stereoFrames != lastStereoFrames;   // counted just before this call
+    lastStereoFrames = D.stereoFrames;
+    if (g_cfg.dumpEverySec > 0 && gameplayFrame && !D.dumpRequested) {
+        static DWORD last = 0;
+        static int n = 0;
+        static wchar_t name[64];
+        DWORD now = GetTickCount();
+        if (now - last >= (DWORD)g_cfg.dumpEverySec * 1000) {
+            last = now;
+            n = n % 20 + 1;
+            swprintf_s(name, L"SCCT_VR_frame_auto%d.txt", n);
+            D.dumpName = name;
+            D.dumpRequested = true;
+            Log("Frame dump %ls", name);
+        }
+    }
     if (!D.autoDumped && D.stereoFrames == 1500) {
         D.dumpRequested = true;
         D.autoDumped = true;
@@ -719,6 +943,107 @@ void DrawLaser(IDirect3DDevice9* dev)
     D.laserState->Apply();
 }
 
+// A texture with premultiplied alpha drawn over `target` as 4 pretransformed vertices
+// (x, y, z, rhw, u, v; triangle strip). The device state is restored afterwards.
+void DrawPremultipliedQuad(IDirect3DDevice9* dev, IDirect3DSurface9* target, IDirect3DTexture9* tex, float v[4][6])
+{
+    if (!D.hudState && FAILED(dev->CreateStateBlock(D3DSBT_ALL, &D.hudState))) return;
+    IDirect3DSurface9* rt = nullptr;
+    D3DSURFACE_DESC td;
+    if (FAILED(target->GetDesc(&td))) return;
+    oGetRenderTarget(dev, 0, &rt);
+    D.hudState->Capture();
+
+    oSetRenderTarget(dev, 0, target);
+    dev->SetRenderState(D3DRS_ZENABLE, FALSE);
+    dev->SetRenderState(D3DRS_LIGHTING, FALSE);
+    dev->SetRenderState(D3DRS_FOGENABLE, FALSE);
+    dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+    dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+    dev->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+    dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    dev->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
+    dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+    dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+    dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0x7);
+    dev->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+    oSetTexture(dev, 0, tex);
+    dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+    dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+    dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+    dev->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+    dev->SetTextureStageState(0, D3DTSS_TEXCOORDINDEX, 0);
+    dev->SetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
+    dev->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+    dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+    dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+    dev->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    dev->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+    dev->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+    oSetVertexShader(dev, nullptr);
+    dev->SetPixelShader(nullptr);
+    oSetFVF(dev, D3DFVF_XYZRHW | D3DFVF_TEX1);
+    D3DVIEWPORT9 vp = { 0, 0, td.Width, td.Height, 0.0f, 1.0f };
+    dev->SetViewport(&vp);
+    oDrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, v, sizeof(v[0]));
+
+    // Render target first: setting it resets the viewport, which the state block restores.
+    if (rt) { oSetRenderTarget(dev, 0, rt); rt->Release(); }
+    D.hudState->Apply();
+}
+
+// XR API: the HUD texture drawn as a panel into the finished eye image (premultiplied alpha).
+void DrawHudOverlay(IDirect3DDevice9* dev)
+{
+    IDirect3DTexture9* tex = nullptr;
+    float v[4][6];
+    if (!vr::HudOverlay(&tex, v)) return;
+    IDirect3DSurface9* bb = nullptr;
+    if (FAILED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb))) return;
+    DrawPremultipliedQuad(dev, bb, tex, v);
+    bb->Release();
+}
+
+// PC desktop window: during gameplay the backbuffer alternates between the eyes. For people
+// watching or streaming, the window shows the right eye only (cropped to the window's
+// proportions around where the eye looks): its image is kept, and put back into the backbuffer
+// on left-eye frames. Runs after the eye image went to the headset, so only the window changes.
+void UpdateDesktopMirror(IDirect3DDevice9* dev, const vr::MirrorFrame& mf)
+{
+    if (!D.bbW || !D.bbH) return;
+    if (!D.mirrorTex && FAILED(dev->CreateTexture(D.bbW, D.bbH, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8,
+                                                  D3DPOOL_DEFAULT, &D.mirrorTex, nullptr))) return;
+    IDirect3DSurface9 *bb = nullptr, *mirror = nullptr;
+    if (FAILED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb))) return;
+    D.mirrorTex->GetSurfaceLevel(0, &mirror);
+    if (mirror && mf.eye == 1) {
+        // Largest rectangle with the window's proportions centred on the eye's forward direction
+        float aspect = D.bbW / (float)D.bbH;
+        float hx = fminf(fminf(mf.left, mf.right), fminf(mf.up, mf.down) * aspect);
+        float hy = hx / aspect;
+        float w = mf.left + mf.right, h = mf.up + mf.down;
+        RECT src = { (LONG)((mf.left - hx) / w * D.bbW), (LONG)((mf.up - hy) / h * D.bbH),
+                     (LONG)((mf.left + hx) / w * D.bbW), (LONG)((mf.up + hy) / h * D.bbH) };
+        if (SUCCEEDED(dev->StretchRect(bb, &src, mirror, nullptr, D3DTEXF_LINEAR))) {
+            D.mirrorValid = true;
+            // The HUD (it goes to its own VR layer, so the eye image has none) over the whole window.
+            // Taken only now, after the frame went to the headset: the texture may have been
+            // recreated meanwhile.
+            IDirect3DTexture9* hud = mf.hud ? vr::HudTexture() : nullptr;
+            if (hud) {
+                float fw = (float)D.bbW, fh = (float)D.bbH;
+                float v[4][6] = { { -0.5f, -0.5f, 0, 1, 0, 0 }, { fw - 0.5f, -0.5f, 0, 1, 1, 0 },
+                                  { -0.5f, fh - 0.5f, 0, 1, 0, 1 }, { fw - 0.5f, fh - 0.5f, 0, 1, 1, 1 } };
+                DrawPremultipliedQuad(dev, mirror, hud, v);
+                hud->Release();
+            }
+        }
+    }
+    if (mirror && D.mirrorValid) dev->StretchRect(mirror, nullptr, bb, nullptr, D3DTEXF_NONE);
+    if (mirror) mirror->Release();
+    bb->Release();
+}
+
 void BeforePresent(IDirect3DDevice9* dev)
 {
     if (D.inPresent) return;
@@ -727,13 +1052,18 @@ void BeforePresent(IDirect3DDevice9* dev)
     PrintStats();
     Unredirect(dev);
     DrawLaser(dev);
+    DrawHudOverlay(dev);
     vr::NoteMenuCursor(D.cursorFound && D.cursorIdx == D.twoDCount, D.cursorX, D.cursorY, D.menuW, D.menuH);
     vr::NoteInGameMenu(D.menuPanelSeen);
     D.menuPanelSeen = false;
     D.cursorFound = false;
     D.twoDCount = D.cursorIdx = 0;
     D.menuW = D.menuH = 0;
+    vr::MirrorFrame mirror;
+    bool mirrorFrame = g_cfg.desktopMirror && vr::MirrorFrameInfo(&mirror);
     vr::OnPresent(dev);
+    if (mirrorFrame) UpdateDesktopMirror(dev, mirror);
+    else D.mirrorValid = false;
     D.hudCleared = false;
     D.zClears = 0;
     D.draws3D = 0;
@@ -888,6 +1218,9 @@ HRESULT STDMETHODCALLTYPE hkReset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* 
     Log("Device Reset %ux%u", pp ? pp->BackBufferWidth : 0, pp ? pp->BackBufferHeight : 0);
     Unredirect(dev);
     if (D.laserState) { D.laserState->Release(); D.laserState = nullptr; }
+    if (D.hudState) { D.hudState->Release(); D.hudState = nullptr; }
+    if (D.mirrorTex) { D.mirrorTex->Release(); D.mirrorTex = nullptr; }
+    D.mirrorValid = false;
     vr::OnPreReset();
     HRESULT hr = oReset(dev, pp);
     if (SUCCEEDED(hr)) {
@@ -922,6 +1255,7 @@ HRESULT STDMETHODCALLTYPE hkSetRenderTarget(IDirect3DDevice9* dev, DWORD index, 
 
 HRESULT STDMETHODCALLTYPE hkSetTransform(IDirect3DDevice9* dev, D3DTRANSFORMSTATETYPE state, const D3DMATRIX* m)
 {
+    HookTimer timer(&D.hookTransformTicks);
     if (m && state == D3DTS_WORLD) D.world = *m;
     if (m && state >= D3DTS_TEXTURE0 && state <= D3DTS_TEXTURE7) {
         int i = state - D3DTS_TEXTURE0;
