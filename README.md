@@ -3,6 +3,9 @@
 An OpenXR VR mod for **Splinter Cell: Chaos Theory — Versus** (multiplayer), built on top of
 **Enhanced SCCT Versus 3.6** and **SCCT Versus Reloaded 3.0a**.
 
+**Tested on [Enhanced SCCT Versus v3.6](https://github.com/Joshhhuaaa/EnhancedSCCTVersus/releases/tag/v3.6)**
+(includes SCCT Versus Reloaded 3.0a) — install that version first.
+
 It is a single proxy `d3d9.dll` that sits under Reloaded's Direct3D 8 → 9 layer and turns the
 game into a stereo, head-tracked (6DoF) VR game, with motion-controller aiming, a separate HUD
 layer and Quest/Touch controller input. No game file is patched; other players do not need the

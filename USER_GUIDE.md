@@ -9,8 +9,9 @@ Version 0.7 · Gameplay video: https://www.youtube.com/watch?v=nbMLmVTR_hc
 
 ## Requirements
 
-- **Enhanced SCCT Versus 3.6** (includes SCCT Versus Reloaded 3.0a). Everyone you play with must use
-  the same Enhanced version.
+- **[Enhanced SCCT Versus v3.6](https://github.com/Joshhhuaaa/EnhancedSCCTVersus/releases/tag/v3.6)**
+  (includes SCCT Versus Reloaded 3.0a) — the version the mod is tested on. Everyone you play with
+  must use the same Enhanced version.
 - Windows 10/11 and a PC VR setup with an **OpenXR runtime**: Virtual Desktop (VDXR), Meta Quest
   Link / Air Link, or SteamVR. Tested with Meta Quest 3 over Virtual Desktop.
 - Microsoft Visual C++ 2015–2022 Redistributable (x86), already required by Enhanced/Reloaded.
