@@ -5,7 +5,7 @@ with head tracking, aim the Mercenary's gun with your right controller and use Q
 controllers for everything else. Other players do not need the mod — you can play with people on
 a normal screen.
 
-Version 0.8 · Gameplay video: https://www.youtube.com/watch?v=nbMLmVTR_hc
+Version 0.8.1 · Gameplay video: https://www.youtube.com/watch?v=nbMLmVTR_hc
 
 ## Requirements
 
@@ -42,6 +42,7 @@ To disable the mod set `Enabled=0` in `SCCT_VR.ini`, or delete `d3d9.dll`.
 | Right stick left/right | Turn (smooth; `SnapTurn` for snap) | Move cursor |
 | Right stick up/down | Mouse wheel (switch item; zoom in/out while zoomed) | Move cursor |
 | Eyes to the gun / head away | Zoom on / off (merc Assault Gun, spy binoculars, see *Zoom*) | — |
+| Left hand to the magazine | Reload (Mercenary, like changing the magazine by hand) | — |
 | Left stick | Move (W/A/S/D) | **Arrow keys** |
 | Right trigger | Fire (left mouse) | Click |
 | Left trigger | Alt-fire / gadget (right mouse) | — |
@@ -78,6 +79,10 @@ Keyboard keys while playing:
 
 - **Mercenary:** first person. The gun is in your right hand and shoots where you point it; the
   game's own laser shows the aim. The right stick turns your body.
+- **Mercenary reload by hand:** bring your left hand to the magazine of the gun — in front of
+  and a little below your right hand — and the gun reloads (the mod presses R). Pull the hand
+  away before the next reload. X still reloads too. Tune the spot with `ReloadForward`,
+  `ReloadDown` and `ReloadRadius` in `SCCT_VR.ini` (`ReloadGesture=0` turns it off).
 - **Mercenary zoom (Assault Gun sniper mode / binoculars):** see below.
 - **Spy:** third person (the camera stays behind the spy). By default (`SpyAim=1`) you steer the
   camera and aim a drawn weapon (click the right stick to draw it) by **turning the right

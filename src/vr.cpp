@@ -151,6 +151,9 @@ struct State {
     bool scopeGestureOn = false;
     float scopeDwell = 0;
     bool scopeTapped = false;   // the gesture pressed the zoom key
+    bool reloadIn = false;      // left hand at the magazine (re-armed when it leaves)
+    float reloadDwell = 0;
+    DWORD reloadTick = 0;       // last reload sent
     bool scopeSeen = false;     // the game zoomed during the gesture
     bool scopeAimLast = false;  // the previous aim update was zoomed
     bool scopeAimValid = false;
@@ -838,6 +841,34 @@ void ScopeGesture(float dt, bool aimActive)
     if (S.scopeGestureOn && S.gameZoomed) S.scopeSeen = true;
 }
 
+// Merc reload: the left hand brought to the magazine of the gun in the right hand taps the
+// reload key, like changing the magazine by hand. Once per approach: the hand has to leave the
+// magazine again before the next one.
+void ReloadGesture(float dt, bool mercAiming)
+{
+    if (!g_cfg.reloadGesture) return;
+    bool in = false;
+    float dist = 0;
+    if (mercAiming && S.ctl.aimValid && S.ctl.leftValid) {
+        Quat q = ToQuat(S.ctl.aim.orientation);
+        Vec3 mag = ToVec(S.ctl.aim.position) + Rotate(q, { 0, -g_cfg.reloadDown, -g_cfg.reloadForward });
+        dist = Length(ToVec(S.ctl.left.position) - mag);
+        in = dist < g_cfg.reloadRadius * (S.reloadIn ? 1.4f : 1.0f);
+    }
+    if (!in) {
+        S.reloadIn = false;
+        S.reloadDwell = 0;
+        return;
+    }
+    if (S.reloadIn) return;
+    if ((S.reloadDwell += dt) < 0.08f) return;
+    S.reloadIn = true;
+    if (GetTickCount() - S.reloadTick < 1000) return;   // not twice in a row
+    S.reloadTick = GetTickCount();
+    input::TapReloadKey();
+    Log("Reload gesture: left hand %.0f cm from the magazine - reload key sent", dist * 100);
+}
+
 // Intersection of the right controller ray with the virtual menu screen.
 bool MenuRayHit(float* t, float* u, float* v)
 {
@@ -1052,6 +1083,7 @@ void UpdateControls(bool sceneLast)
     loggedFocus = false;
 
     ScopeGesture(dt, aimActive || spyMode);
+    ReloadGesture(dt, aimActive && !spyMode && !S.frameScope);
     // Camera motion seen while zoomed was not caused by counted mouse output: do not learn from it.
     if (S.frameScope != S.scopeAimLast) {
         if (S.frameScope) {

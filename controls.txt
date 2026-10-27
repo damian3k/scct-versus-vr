@@ -24,6 +24,9 @@ Left grip                   Roll / laser                      [Q]
 A                           Jump                              [Space]
 B                           Crouch                            [C]
 X                           Reload                            [R]
+Left hand to the magazine   Reload: bring your left hand to the magazine of the
+                            gun (in front of and below the right controller), like
+                            changing the magazine by hand     [R]
 Y  (tap)                    Vision modes                      [Tab]
 Y  (hold)                   Co-op move                        [T]
 Menu button                 In-game menu                      [Esc]
@@ -108,7 +111,8 @@ All of this can be changed in System\SCCT_VR.ini:
   [SpyBindings]   overrides while playing the Spy
   [MenuBindings]  overrides in menus
 Any control can also get a second action on a long press:  <Name>Hold=<key>
-(for example YHold=T). ScopeKey=<key> in [Bindings] is the key the zoom gesture presses.
+(for example YHold=T). ScopeKey=<key> in [Bindings] is the key the zoom gesture presses,
+ReloadKey=<key> the key the reload gesture presses.
 Control names: RightTrigger, LeftTrigger, RightGrip, LeftGrip,
 A, B, X, Y, LeftStickClick, RightStickClick, Menu, LeftStickUp/Down/Left/Right,
 RightStickUp/Down. Keys: a letter or digit, F1-F12, Space, Shift, Ctrl, Alt, Tab, Esc,

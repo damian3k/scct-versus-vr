@@ -15,6 +15,8 @@ struct Controls {
     float moveX = 0, moveY = 0;        // left thumbstick
     bool aimValid = false;
     XrPosef aim;                       // right controller aim pose in LOCAL space
+    bool leftValid = false;
+    XrPosef left;                      // left controller (grip) pose in LOCAL space
     bool toggleAim = false;            // edge-triggered pseudo actions
     bool recenter = false;
     bool menuPressed = false;          // Menu button tapped (its key was sent) this update
@@ -46,6 +48,8 @@ bool GameHasFocus();
 void SendMouseMove(int dx, int dy);
 // Taps the [Bindings] ScopeKey (the game's zoom toggle, B by default).
 void TapScopeKey();
+// Taps the [Bindings] ReloadKey (R by default).
+void TapReloadKey();
 void ReleaseAll();
 
 } // namespace input

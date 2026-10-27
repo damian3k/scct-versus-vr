@@ -58,6 +58,13 @@ struct Config {
     float scopeSize = 0.8f;           // screen size vs the game's normal field of view
     float scopeMouseScale = 1.0f;     // zoomed: mouse motion per degree of controller motion (x learned counts/deg)
 
+    // Merc reload: the left hand brought to the gun's magazine taps ReloadKey. The magazine sits
+    // ReloadForward m in front of and ReloadDown m below the right controller's aim point.
+    bool  reloadGesture = true;
+    float reloadForward = 0.10f;
+    float reloadDown = 0.07f;
+    float reloadRadius = 0.10f;       // meters around that point
+
     // Spy (third person): the right controller's rotation steers the camera / aims (0 = right stick)
     bool  spyAim = true;
     bool  spyStableCamera = true;     // render from a camera that does not orbit when the controller turns

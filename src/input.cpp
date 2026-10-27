@@ -100,17 +100,21 @@ DWORD g_tapUpTick[kCtlCount];
 int g_context = kCtxGame;
 DWORD g_pressTick[kCtlCount], g_repeatTick[kCtlCount];
 bool g_logSends;                // XR API: log the first injected inputs (diagnostics)
-Bind g_scopeKey;
-bool g_scopeUpPending;
-DWORD g_scopeUpTick;
+// A key pressed by a gesture and released after kTapLengthMs.
+struct KeyTap {
+    Bind key;
+    bool upPending = false;
+    DWORD upTick = 0;
+};
+KeyTap g_scopeTap, g_reloadTap;
 const DWORD kChordMs = 120;     // both stick clicks within this time = chord
 bool g_clickWait[2];            // left / right stick click held back, waiting for the other
 DWORD g_clickTick[2];
 bool g_chordHeld;               // chord done, ignore both clicks until both are released
 
 XrActionSet g_set = XR_NULL_HANDLE;
-XrAction g_move, g_look, g_trigL, g_trigR, g_gripL, g_gripR, g_a, g_b, g_x, g_y, g_clickL, g_clickR, g_menu, g_aim;
-XrSpace g_aimSpace = XR_NULL_HANDLE;
+XrAction g_move, g_look, g_trigL, g_trigR, g_gripL, g_gripR, g_a, g_b, g_x, g_y, g_clickL, g_clickR, g_menu, g_aim, g_handL;
+XrSpace g_aimSpace = XR_NULL_HANDLE, g_handLSpace = XR_NULL_HANDLE;
 XrPath g_left, g_right;
 XrInstance g_instance;
 bool g_ok;
@@ -179,7 +183,9 @@ void LoadBindings()
     }
     wchar_t buf[64];
     GetPrivateProfileStringW(L"Bindings", L"ScopeKey", L"B", buf, 64, IniPath());
-    g_scopeKey = Parse(buf);
+    g_scopeTap.key = Parse(buf);
+    GetPrivateProfileStringW(L"Bindings", L"ReloadKey", L"R", buf, 64, IniPath());
+    g_reloadTap.key = Parse(buf);
 }
 
 // Keys held through window messages (XR API): the game also checks GetKeyState every frame and
@@ -400,7 +406,8 @@ bool Init(XrInstance instance, XrSession session)
               MakeAction(&g_clickL, XR_ACTION_TYPE_BOOLEAN_INPUT, "stick_click_left", "Left stick click") &&
               MakeAction(&g_clickR, XR_ACTION_TYPE_BOOLEAN_INPUT, "stick_click_right", "Right stick click") &&
               MakeAction(&g_menu, XR_ACTION_TYPE_BOOLEAN_INPUT, "menu", "Menu") &&
-              MakeAction(&g_aim, XR_ACTION_TYPE_POSE_INPUT, "aim", "Weapon aim", g_right);
+              MakeAction(&g_aim, XR_ACTION_TYPE_POSE_INPUT, "aim", "Weapon aim", g_right) &&
+              MakeAction(&g_handL, XR_ACTION_TYPE_POSE_INPUT, "left_hand", "Left hand", g_left);
     if (!ok) return false;
 
     Suggest("/interaction_profiles/oculus/touch_controller", {
@@ -418,6 +425,7 @@ bool Init(XrInstance instance, XrSession session)
         { g_clickR, "/user/hand/right/input/thumbstick/click" },
         { g_menu, "/user/hand/left/input/menu/click" },
         { g_aim, "/user/hand/right/input/aim/pose" },
+        { g_handL, "/user/hand/left/input/grip/pose" },
     });
     Suggest("/interaction_profiles/khr/simple_controller", {
         { g_trigR, "/user/hand/right/input/select/click" },
@@ -435,6 +443,9 @@ bool Init(XrInstance instance, XrSession session)
     asi.subactionPath = g_right;
     asi.poseInActionSpace.orientation.w = 1.0f;
     if (XR_FAILED(xrCreateActionSpace(session, &asi, &g_aimSpace))) { Log("xrCreateActionSpace failed"); return false; }
+    asi.action = g_handL;
+    asi.subactionPath = g_left;
+    if (XR_FAILED(xrCreateActionSpace(session, &asi, &g_handLSpace))) Log("xrCreateActionSpace(left hand) failed");
 
     Log("Controller input ready");
     g_ok = true;
@@ -449,18 +460,25 @@ void ReleaseAll()
         g_held[i] = g_pending[i] = g_ignore[i] = false;
         g_tapUpTick[i] = 0;
     }
-    if (g_scopeUpPending) SendKey(g_scopeKey, false);
-    g_scopeUpPending = false;
+    for (KeyTap* t : { &g_scopeTap, &g_reloadTap }) {
+        if (t->upPending) SendKey(t->key, false);
+        t->upPending = false;
+    }
 }
 
-void TapScopeKey()
+namespace {
+void Tap(KeyTap& t)
 {
-    if (g_scopeKey.kind == Kind::None) return;
-    if (g_scopeUpPending) SendKey(g_scopeKey, false);
-    SendKey(g_scopeKey, true);
-    g_scopeUpPending = true;
-    g_scopeUpTick = GetTickCount() + kTapLengthMs;
+    if (t.key.kind == Kind::None) return;
+    if (t.upPending) SendKey(t.key, false);
+    SendKey(t.key, true);
+    t.upPending = true;
+    t.upTick = GetTickCount() + kTapLengthMs;
 }
+} // namespace
+
+void TapScopeKey() { Tap(g_scopeTap); }
+void TapReloadKey() { Tap(g_reloadTap); }
 
 void SendMouseMove(int dx, int dy)
 {
@@ -510,16 +528,20 @@ struct Raw {
     bool a = false, b = false, x = false, y = false, clickL = false, clickR = false, menu = false;
     bool aimValid = false;
     XrPosef aim = {};
+    bool leftValid = false;
+    XrPosef left = {};
 };
 
 void Process(const Raw& r, bool rightStickButtons, bool menuMode, bool spyMode, Controls* out);
 
-// Tap of the zoom key still waiting for its key-up.
+// Gesture taps (zoom, reload) still waiting for their key-up.
 void ScopeKeyUp()
 {
-    if (g_scopeUpPending && GetTickCount() >= g_scopeUpTick) {
-        SendKey(g_scopeKey, false);
-        g_scopeUpPending = false;
+    for (KeyTap* t : { &g_scopeTap, &g_reloadTap }) {
+        if (t->upPending && GetTickCount() >= t->upTick) {
+            SendKey(t->key, false);
+            t->upPending = false;
+        }
     }
 }
 
@@ -561,6 +583,12 @@ void Update(XrSession session, XrSpace localSpace, XrTime time, bool focused, bo
         (loc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) {
         r.aimValid = true;
         r.aim = loc.pose;
+    }
+    XrSpaceLocation lloc{ XR_TYPE_SPACE_LOCATION };
+    if (g_handLSpace && XR_SUCCEEDED(xrLocateSpace(g_handLSpace, localSpace, time, &lloc)) &&
+        (lloc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) {
+        r.leftValid = true;
+        r.left = lloc.pose;
     }
     Process(r, rightStickButtons, menuMode, spyMode, out);
 }
@@ -631,6 +659,11 @@ void UpdateXrApi(const xrapi::Packet& p, bool focused, bool rightStickButtons, b
     r.aim.position = { p.rightPos[0], p.rightPos[1], p.rightPos[2] };
     float len = qx * qx + qy * qy + qz * qz + qw * qw;
     r.aimValid = len > 0.5f && len < 1.5f;
+    // Left hand: only its position is used (reload gesture)
+    float lq = p.leftQ[0] * p.leftQ[0] + p.leftQ[1] * p.leftQ[1] + p.leftQ[2] * p.leftQ[2] + p.leftQ[3] * p.leftQ[3];
+    r.leftValid = lq > 0.5f && lq < 1.5f;
+    r.left.orientation = { p.leftQ[0], p.leftQ[1], p.leftQ[2], p.leftQ[3] };
+    r.left.position = { p.leftPos[0], p.leftPos[1], p.leftPos[2] };
     Process(r, rightStickButtons, menuMode, spyMode, out);
 }
 
@@ -779,6 +812,8 @@ void Process(const Raw& r, bool rightStickButtons, bool menuMode, bool spyMode, 
     out->moveY = move.y;
     out->aimValid = r.aimValid;
     out->aim = r.aim;
+    out->leftValid = r.leftValid;
+    out->left = r.left;
 }
 
 } // namespace

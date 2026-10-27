@@ -76,6 +76,10 @@ void LoadConfig()
     g_cfg.scopeDistance           = ReadFloat(L"ScopeDistance", d.scopeDistance);
     g_cfg.scopeSize               = ReadFloat(L"ScopeSize", d.scopeSize);
     g_cfg.scopeMouseScale         = ReadFloat(L"ScopeMouseScale", d.scopeMouseScale);
+    g_cfg.reloadGesture           = ReadInt(L"ReloadGesture", d.reloadGesture) != 0;
+    g_cfg.reloadForward           = ReadFloat(L"ReloadForward", d.reloadForward);
+    g_cfg.reloadDown              = ReadFloat(L"ReloadDown", d.reloadDown);
+    g_cfg.reloadRadius            = ReadFloat(L"ReloadRadius", d.reloadRadius);
     g_cfg.spyAim                  = ReadInt(L"SpyAim", d.spyAim) != 0;
     g_cfg.spyStableCamera         = ReadInt(L"SpyStableCamera", d.spyStableCamera) != 0;
     g_cfg.spyEyeRight             = ReadFloat(L"SpyEyeRight", d.spyEyeRight);

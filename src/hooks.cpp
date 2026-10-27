@@ -617,6 +617,23 @@ bool RouteDraw(IDirect3DDevice9* dev, const DrawInfo& di)
         if (hud) Redirect(dev);
         else Unredirect(dev);
     }
+    if (D.redirected) {
+        // Coverage (alpha) of the HUD layer: only draws that hide what is behind them add to it.
+        // Additive sprites (the merc's crosshair dot on a black square) only add light; counting
+        // their square as coverage darkened the world behind it.
+        DWORD destBlend = D3DBLEND_INVSRCALPHA, blendOn = FALSE;
+        dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &blendOn);
+        dev->GetRenderState(D3DRS_DESTBLEND, &destBlend);
+        bool additive = blendOn && (destBlend == D3DBLEND_ONE || destBlend == D3DBLEND_INVSRCCOLOR);
+        dev->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, TRUE);
+        dev->SetRenderState(D3DRS_SRCBLENDALPHA, additive ? D3DBLEND_ZERO : D3DBLEND_ONE);
+        dev->SetRenderState(D3DRS_DESTBLENDALPHA, additive ? D3DBLEND_ONE : D3DBLEND_INVSRCALPHA);
+        if (D.dump) {
+            DWORD srcBlend = 0;
+            dev->GetRenderState(D3DRS_SRCBLEND, &srcBlend);
+            Dump("    hud blend=%lu %lu/%lu%s", blendOn, srcBlend, destBlend, additive ? " (additive: no coverage)" : "");
+        }
+    }
 
     float box[4] = { 0, 0, 0, 0 };
     if (D.dump && is2D) ScreenCoverage(dev, di, (D.fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW, box);

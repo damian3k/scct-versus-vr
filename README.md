@@ -30,12 +30,13 @@ For players: see [`USER_GUIDE.md`](USER_GUIDE.md) and [`controls.txt`](controls.
 
 ---
 
-## Status (v0.8)
+## Status (v0.8.1)
 
 Working (tested on Meta Quest 3 through Virtual Desktop, RTX 3090, online matches):
 
 - Stereo rendering with 6DoF head tracking, recenter that waits for real tracking.
 - Mercenary: aims with the right controller; the first-person weapon is drawn in the right hand.
+- Mercenary reload by hand: bring the left hand to the gun's magazine.
 - Mercenary zoom (Assault Gun sniper mode): put your eye to the gun to switch it on; the zoomed
   view is shown on a screen in front of the eyes, aiming like a mouse.
 - Spy in third person: the right controller's rotation steers the camera and aims, the VR view
@@ -195,7 +196,9 @@ Every gameplay frame looks like this (confirmed with frame dumps):
 5. **depth-only clear** on the backbuffer, then the HUD (Canvas).
 
 2D draws on the backbuffer after the composite are redirected into a separate HUD texture, except
-those whose stage-0 texture is a render target (post passes). The HUD texture is shown as a
+those whose stage-0 texture is a render target (post passes). Its alpha is the HUD's coverage:
+normal draws add to it, additive ones (destination blend ONE, e.g. the merc's crosshair dot on a
+black square) do not, so they do not darken the world behind the HUD. The HUD texture is shown as a
 premultiplied-alpha OpenXR quad layer. In follow mode the quad's orientation is the game camera's
 rotation expressed in the rendered body camera space (taken from the same frame's matrices), so
 markers projected by the game land on their targets. The HUD swapchain is acquired/released only
@@ -218,6 +221,13 @@ view uses a separate body yaw turned with the right stick.
 The first-person weapon is drawn after a mid-scene depth-only clear close to the camera; those
 draws get a world matrix that moves them from game-camera space into the right hand.
 `AimMode=2` enables controller aiming only while such weapon draws are seen (Mercenary).
+
+### Reload gesture
+`ReloadGesture` (`vr.cpp`): while the merc aims with the controller, the magazine point is
+`ReloadForward` m ahead of and `ReloadDown` m below the right controller's aim pose; when the left
+controller (grip pose) stays within `ReloadRadius` of it for 80 ms, `ReloadKey` (R) is tapped once.
+The hand has to leave the zone (1.4× radius) before the next reload, and two reloads are at least
+1 s apart.
 
 ### Zoom: merc sniper mode / spy binoculars
 `ScopeGesture` (`vr.cpp`): when the right controller is within `ScopeGestureDistance` of the eyes
