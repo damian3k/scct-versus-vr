@@ -30,7 +30,7 @@ For players: see [`USER_GUIDE.md`](USER_GUIDE.md) and [`controls.txt`](controls.
 
 ---
 
-## Status (v0.8.3)
+## Status (v0.8.4)
 
 Working (tested on Meta Quest 3 through Virtual Desktop, RTX 3090, online matches):
 
@@ -47,6 +47,7 @@ Working (tested on Meta Quest 3 through Virtual Desktop, RTX 3090, online matche
 - Volumetric light shafts (e.g. the sunbeams in Warehouse) and the merc's flashlight cone seen
   from outside are in the right place in both eyes.
 - Spy camouflage suit: the see-through effect works in VR.
+- Merc motion vision: the box highlighting a moving object sits on the object in each eye.
 - The PC window shows what the headset shows (the right eye, with the HUD where it is in VR),
   for streaming / people watching (`DesktopMirror`).
 - HUD on its own OpenXR quad layer that follows the game camera, so objective markers sit on
@@ -210,6 +211,14 @@ menus the frame has no 3D world or its last pretransformed (XYZRHW) sprite is th
 the in-game menu during a match is drawn over the HUD (XYZ + ortho, not XYZRHW) and is recognised
 by its 512x512 background panel texture, which the gameplay HUD never uses (read with
 `GetTexture`, see `Stage0Size` in `hooks.cpp`). Leaving the menu any way returns the game controls.
+
+### Screen-space boxes (motion vision)
+The merc's motion vision highlights a moving object with a small pretransformed (XYZRHW)
+rectangle drawn after the composite, sampling the rendered image (`ReprojectScreenBox`). The game
+places it with its own camera, so its corners are taken as points on a plane `ScreenBoxDistance`
+in front of the game camera, moved into the eye with `inverse(gameView) × eyeView`, projected with
+the eye's projection, and its texture coordinates shifted by the same amount so it samples the
+eye image there. Only small boxes are moved (full-screen post passes stay as they are).
 
 ### PC window
 During gameplay the backbuffer alternates between the eyes and has no HUD (it is a separate VR

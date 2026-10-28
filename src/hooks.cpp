@@ -122,6 +122,10 @@ struct DevState {
     // is swapped for the eye's: eye proj * inv(game proj).
     D3DMATRIX screenFix = Identity();
     bool screenFixValid = false;
+    // The last eye camera of this frame, for screen-space boxes drawn after the scene (motion
+    // vision highlight): game projection, eye projection and game camera space -> eye space.
+    D3DMATRIX lastGameProj, lastEyeProj, lastGameToEye;
+    bool lastStereoValid = false;
     D3DMATRIX texT[8];                       // texture matrices as set by the game
     bool texTSet[8] = {};
     DWORD texCI[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };   // D3DTSS_TEXCOORDINDEX
@@ -217,6 +221,13 @@ void Apply(IDirect3DDevice9* dev)
         D.eyeToGame = Inverse(v, &eyeInv) ? Mul(eyeInv, D.view) : Identity();
         D.screenFixValid = Inverse(D.proj, &projInv);
         if (D.screenFixValid) D.screenFix = Mul(p, projInv);
+        D3DMATRIX gameInv;
+        if (Inverse(D.view, &gameInv)) {
+            D.lastGameProj = D.proj;
+            D.lastEyeProj = p;
+            D.lastGameToEye = Mul(gameInv, v);
+            D.lastStereoValid = true;
+        }
     }
     if (D.haveView) oSetTransform(dev, D3DTS_VIEW, &v);
     if (D.haveProj) oSetTransform(dev, D3DTS_PROJECTION, &p);
@@ -1100,6 +1111,7 @@ void BeforePresent(IDirect3DDevice9* dev)
     else if (D.frame3D < 10 && vr::Available()) D.menuFrames++;
     D.frame3D = 0;
     D.frameStereo = false;
+    D.lastStereoValid = false;
     FrameDumpControl();
     // The next frame may not set its camera again, so push the new eye's camera now.
     Apply(dev);
@@ -1206,8 +1218,89 @@ HRESULT STDMETHODCALLTYPE hkDrawIndexedPrimitive(IDirect3DDevice9* dev, D3DPRIMI
     return DoDraw(dev, di, [&] { return oDrawIndexedPrimitive(dev, type, base, minIdx, num, start, count); });
 }
 
+// Game screen pixel -> eye image pixel, for a point on a plane `dist` (Unreal units) in front of
+// the game camera. False if it ends up behind the eye.
+bool GameScreenToEye(float x, float y, float dist, float* ex, float* ey)
+{
+    const D3DMATRIX& P = D.lastGameProj;
+    if (!P._11 || !P._22) return false;
+    float nx = (x + 0.5f) / D.bbW * 2.0f - 1.0f, ny = 1.0f - (y + 0.5f) / D.bbH * 2.0f;
+    float px = (nx - P._31) / P._11 * dist, py = (ny - P._32) / P._22 * dist;
+    const D3DMATRIX& G = D.lastGameToEye;
+    float vx = px * G._11 + py * G._21 + dist * G._31 + G._41;
+    float vy = px * G._12 + py * G._22 + dist * G._32 + G._42;
+    float vz = px * G._13 + py * G._23 + dist * G._33 + G._43;
+    const D3DMATRIX& E = D.lastEyeProj;
+    float cx = vx * E._11 + vy * E._21 + vz * E._31 + E._41;
+    float cy = vx * E._12 + vy * E._22 + vz * E._32 + E._42;
+    float cw = vx * E._14 + vy * E._24 + vz * E._34 + E._44;
+    if (cw < 1e-3f) return false;
+    *ex = (cx / cw * 0.5f + 0.5f) * D.bbW - 0.5f;
+    *ey = (0.5f - cy / cw * 0.5f) * D.bbH - 0.5f;
+    return true;
+}
+
+// Screen-space boxes drawn after the scene (the merc's motion vision highlights a moving object
+// with a rectangle sampling the rendered image): the game places them with its own camera, so in
+// VR they sit in the same spot in both eyes, off by the angle between the head and the gun. They
+// are moved to where that rectangle appears in this eye, taken on a plane ScreenBoxDistance in
+// front of the game camera (the object's real distance is unknown; the error left is a small
+// stereo offset for objects much nearer or farther), and sample the image there.
+// Returns the vertices to draw instead (in `buf`), or nullptr to draw the game's.
+const void* ReprojectScreenBox(IDirect3DDevice9* dev, D3DPRIMITIVETYPE type, UINT count, const void* data, UINT stride,
+                               BYTE* buf, UINT bufSize)
+{
+    if (!g_cfg.reprojectScreenBoxes || !D.lastStereoValid || !D.rtIsBB || !D.compositeDone || D.hudStarted || !data)
+        return nullptr;
+    UINT n = VertexCount(type, count);
+    if (n == 0 || n > 6 || stride < 16 || n * stride > bufSize) return nullptr;
+    RefreshDrawState(dev);
+    if (D.vsBound || (D.fvf & D3DFVF_POSITION_MASK) != D3DFVF_XYZRHW) return nullptr;
+    if (!StageSamplesScreen(dev, 0)) return nullptr;
+    const BYTE* src = (const BYTE*)data;
+    float minX = 1e30f, maxX = -1e30f, minY = 1e30f, maxY = -1e30f;
+    for (UINT i = 0; i < n; i++) {
+        const float* v = (const float*)(src + i * stride);
+        minX = fminf(minX, v[0]); maxX = fmaxf(maxX, v[0]);
+        minY = fminf(minY, v[1]); maxY = fmaxf(maxY, v[1]);
+    }
+    if (maxX - minX > D.bbW * 0.8f || maxY - minY > D.bbH * 0.8f) return nullptr;   // full-screen pass
+
+    // Texture coordinate sets follow the position (float2 each), after diffuse / specular.
+    UINT texOffset = 16 + ((D.fvf & D3DFVF_DIFFUSE) ? 4 : 0) + ((D.fvf & D3DFVF_SPECULAR) ? 4 : 0);
+    UINT texSets = (D.fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
+    if (D.fvf & 0xFFFF0000) return nullptr;   // non-2D texture coordinate sizes
+    if (texOffset + texSets * 8 > stride) return nullptr;
+
+    float dist = g_cfg.screenBoxDistance * g_cfg.worldScale;
+    memcpy(buf, data, n * stride);
+    for (UINT i = 0; i < n; i++) {
+        float* v = (float*)(buf + i * stride);
+        float ex, ey;
+        if (!GameScreenToEye(v[0], v[1], dist, &ex, &ey)) return nullptr;
+        float dx = ex - v[0], dy = ey - v[1];
+        v[0] = ex;
+        v[1] = ey;
+        for (UINT t = 0; t < texSets; t++) {
+            float* uv = (float*)(buf + i * stride + texOffset + t * 8);
+            uv[0] += dx / D.bbW;
+            uv[1] += dy / D.bbH;
+        }
+    }
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        Log("Screen-space box (motion vision highlight) moved to the eye's view");
+    }
+    if (D.dump) Dump("    screen box %.0f,%.0f-%.0f,%.0f moved to the eye's view", minX, minY, maxX, maxY);
+    return buf;
+}
+
 HRESULT STDMETHODCALLTYPE hkDrawPrimitiveUP(IDirect3DDevice9* dev, D3DPRIMITIVETYPE type, UINT count, const void* data, UINT stride)
 {
+    BYTE moved[6 * 64];
+    const void* box = ReprojectScreenBox(dev, type, count, data, stride, moved, sizeof(moved));
+    if (box) data = box;
     DrawInfo di = { "DPUP", type, count, 0, VertexCount(type, count), data, stride, false };
     return DoDraw(dev, di, [&] { return oDrawPrimitiveUP(dev, type, count, data, stride); });
 }

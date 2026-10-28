@@ -38,6 +38,8 @@ void LoadConfig()
     g_cfg.fixShaderMatrices       = ReadInt(L"FixShaderMatrices", d.fixShaderMatrices) != 0;
     g_cfg.shaderMatrixTolerance   = ReadFloat(L"ShaderMatrixTolerance", d.shaderMatrixTolerance);
     g_cfg.fixProjectedLights      = ReadInt(L"FixProjectedLights", d.fixProjectedLights) != 0;
+    g_cfg.reprojectScreenBoxes    = ReadInt(L"ReprojectScreenBoxes", d.reprojectScreenBoxes) != 0;
+    g_cfg.screenBoxDistance       = ReadFloat(L"ScreenBoxDistance", d.screenBoxDistance);
     g_cfg.requireMainRenderTarget = ReadInt(L"RequireMainRenderTarget", d.requireMainRenderTarget) != 0;
     g_cfg.recenterKey             = ReadInt(L"RecenterKey", d.recenterKey);
     g_cfg.menuQuadDistance        = ReadFloat(L"MenuQuadDistance", d.menuQuadDistance);

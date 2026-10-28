@@ -10,6 +10,8 @@ struct Config {
     int   worldUpAxis = 2;            // 0=X 1=Y 2=Z (Unreal world is Z-up)
     bool  fixShaderMatrices = true;   // correct WVP matrices uploaded as vertex shader constants
     bool  fixProjectedLights = true;  // correct camera-space texgen (flashlight, shadow projectors)
+    bool  reprojectScreenBoxes = true;  // screen-space boxes after the scene (motion vision) moved to the eye's view
+    float screenBoxDistance = 6.0f;   // meters: distance assumed for them
     float shaderMatrixTolerance = 0.02f;
     bool  requireMainRenderTarget = true; // only treat backbuffer-sized targets as the main view
     int   recenterKey = 0x24;         // VK_HOME
