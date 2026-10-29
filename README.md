@@ -6,6 +6,8 @@
 
 **[VIDEO: SCCT Versus: VR, v0.8.3 - multiplayer test](https://www.youtube.com/watch?v=1Vm78hDMG1s)**
 
+**[NexusMods: screenshots](https://www.nexusmods.com/splintercellchaostheory/mods/29?tab=images)**
+
 An OpenXR VR mod for **Splinter Cell: Chaos Theory — Versus** (multiplayer), built on top of
 **Enhanced SCCT Versus 3.6** and **SCCT Versus Reloaded 3.0a**.
 
