@@ -1,3 +1,5 @@
+<img src="images/icon.png" alt="SCCT VR" width="160">
+
 # SCCT Versus VR
 
 [![SCCT Versus VR, v0.8.3 - multiplayer test](images/video_v083.jpg)](https://www.youtube.com/watch?v=1Vm78hDMG1s)
