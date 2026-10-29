@@ -1,6 +1,8 @@
 # SCCT Versus VR
 
-[![SCCT Versus VR - gameplay video](https://img.youtube.com/vi/nbMLmVTR_hc/maxresdefault.jpg)](https://www.youtube.com/watch?v=nbMLmVTR_hc)
+[![SCCT Versus VR, v0.8.3 - multiplayer test](images/video_v083.jpg)](https://www.youtube.com/watch?v=1Vm78hDMG1s)
+
+**[VIDEO: SCCT Versus: VR, v0.8.3 - multiplayer test](https://www.youtube.com/watch?v=1Vm78hDMG1s)**
 
 An OpenXR VR mod for **Splinter Cell: Chaos Theory — Versus** (multiplayer), built on top of
 **Enhanced SCCT Versus 3.6** and **SCCT Versus Reloaded 3.0a**.
@@ -24,7 +26,7 @@ game into a stereo, head-tracked (6DoF) VR game, with motion-controller aiming, 
 layer and Quest/Touch controller input. No game file is patched; other players do not need the
 mod.
 
-Gameplay video: https://www.youtube.com/watch?v=nbMLmVTR_hc
+Gameplay video: https://www.youtube.com/watch?v=1Vm78hDMG1s
 
 For players: see [`USER_GUIDE.md`](USER_GUIDE.md) and [`controls.txt`](controls.txt).
 
