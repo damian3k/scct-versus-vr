@@ -104,6 +104,8 @@ SCCT_VR.ini     default configuration (every option is commented)
 build.bat       builds bin\d3d9.dll and copies openxr_loader.dll + SCCT_VR.ini next to it
 USER_GUIDE.md   end-user installation and controls
 controls.txt    full controller layout for both teams
+CONTRIBUTING.md how to build, test and send changes (for contributors)
+CLAUDE.md       the same rules plus technical pitfalls, for coding agents
 ```
 
 ---
