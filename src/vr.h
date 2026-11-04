@@ -49,6 +49,13 @@ IDirect3DTexture9* HudTexture();
 // right hand. False when aim mode or controller tracking is not active.
 bool WeaponWorld(const D3DMATRIX& world, const D3DMATRIX& gameView, D3DMATRIX* out);
 
+// The camera the engine should cull from instead of the game camera (org: its origin, rot: its
+// rotation as pitch/yaw/roll in 65536 = 360 deg): where the head looks in the game world (radians;
+// yaw like the game camera's, pitch up positive). For the spy's third-person camera the origin
+// moves as well (*moved, newOrg): the VR view is placed relative to the spy, not at the game camera.
+// False when the game camera is not followed by the VR view (menus, zoom...).
+bool HeadCullCamera(const float org[3], const int rot[3], float* yaw, float* pitch, float newOrg[3], bool* moved);
+
 // The previous frame pair was 3D gameplay (not a menu / loading screen).
 bool SceneActive();
 

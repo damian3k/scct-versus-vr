@@ -48,6 +48,8 @@ Working (tested on Meta Quest 3 through Virtual Desktop, RTX 3090, online matche
 - Spy in third person: the right controller's rotation steers the camera and aims, the VR view
   stays steady behind the spy; binoculars with the same gesture, looking around with the head.
 - Spy first-person view (both stick clicks) — **experimental**, see known issues.
+- Head culling: the engine culls from where the head looks, not from the controller-steered game
+  camera, so nothing goes missing when you look away from where you aim (`HeadCulling`, F9).
 - Dynamic lights, shadows and environment reflections stay fixed to the world; the skybox is
   rendered at infinity.
 - Volumetric light shafts (e.g. the sunbeams in Warehouse) and the merc's flashlight cone seen
@@ -64,9 +66,10 @@ Working (tested on Meta Quest 3 through Virtual Desktop, RTX 3090, online matche
 
 Known issues / limitations:
 
-- **Looking behind you causes graphical glitches** (missing geometry, black areas): the game
-  only draws what its own camera sees and culls everything else. Still being worked on (see
-  roadmap).
+- **Looking away from where you aim** used to cause graphical glitches (missing geometry, black
+  areas): the game only draws what its own camera sees. `HeadCulling` (on by default, F9 toggles
+  it in game) makes the engine cull from the head instead, see *Head culling* below. Not
+  enabled on the Quest standalone backend.
 - **Spy first-person view is experimental:** the game is not made for it — the view comes from
   the spy's head while the game still renders and culls from its third-person camera, so it can
   go wild (geometry popping near the head, walls when backed against them, odd moments while
@@ -93,6 +96,7 @@ src/            the mod (d3d9.dll proxy)
   xrapi.cpp       WinlatorXR XR API client (Quest standalone: tracking packets in, VR mode out)
   dihook.cpp      DirectInput8 wrapper that injects mouse input (Quest: Wine ignores SendInput)
   rawinject.cpp   synthetic raw input messages (Quest fallback)
+  enginepatch.cpp hook in the game's scene node update (head culling), see Head culling
   config.cpp/.h   SCCT_VR.ini
   vrmath.h        small matrix/quaternion helpers (D3D row-vector convention)
   log.cpp/.h      SCCT_VR.log
@@ -175,6 +179,33 @@ most draws is the main view. UE2 renders the sky zone (a small-scale model far a
 with its own camera: it gets the head's rotation only — no eye separation, no head movement and
 no spy camera correction — so the sky looks infinitely far away instead of a tiny box around the
 head.
+
+### Head culling (`enginepatch.cpp`)
+
+The engine culls from its camera (the "scene node"), which follows the game camera, and in aim
+mode the mod steers that camera to the controller. What the head sees but the controller does
+not point at was culled. The game exe (32-bit, base `0x10900000`) is patched in memory, only if
+the bytes match: a hook at `0x10A16670` (the scene node's matrix update, stdcall, one argument,
+the node: origin floats at `+0x194`, rotation as 3 ints pitch/yaw/roll with 65536 = 360° at
+`+0x1D8`, horizontal FOV in degrees at `+0x1E4`, world→camera matrix at `+0x14`).
+
+- Before the node's matrices are built, the main view's rotation is replaced by the head's world
+  orientation (`vr::HeadCullCamera`: body yaw + head yaw, head pitch, no roll) and its FOV is
+  widened to `HeadCullingFov` (the eyes see ~99° vertically, the game camera 69°). The main view
+  is the first node of a frame with a FOV of 80–170°; other nodes with the same rotation (weapon,
+  sky) get the same, other cameras (zoom, shadow maps) are left alone. The game's own logic (the
+  controller's rotation, firing) is not touched. For the spy's third-person / first-person view
+  the origin is moved too, with the formulas `EyeTransform` uses to place the VR view.
+- The hook builds the node's world→camera matrix twice, with the real and the head rotation, and
+  keeps both. `hkSetTransform` calls `enginepatch::UndoView` / `UndoProj`: a view that equals the
+  modified matrix times a fixed axis permutation is replaced by the game's own, and the FOV
+  change is divided out of the projection. Everything else in the mod (aim loop, HUD, weapon,
+  shader fixes) still sees the game camera. Other views pass through.
+- The engine builds the texture matrices of projected lights, shadows and reflections from the
+  same node, so `FixCameraSpaceTexgen` also multiplies `enginepatch::CameraSpaceFix()` (game
+  camera space → modified camera space) in front of the game's matrix.
+- Off on the Quest standalone backend (`S.xrapi`). `HeadCullingLog=1` logs each node handled and
+  the matching in `SCCT_VR.log`.
 
 ### Lights, shadows and reflections
 Projected lights (flashlight), shadow-buffer projection and environment-mapped reflections (glass)
@@ -373,8 +404,8 @@ and videos after every change:
 **Stage 2 — engine hook (the big one).** Hook the Unreal Engine 2.5 camera/aim path instead of
 steering the camera with the mouse:
 
-- keep the game camera at the head (render and cull with the head → no glitches when looking
-  around or behind, HUD can stay still while markers still line up);
+- keep the game camera at the head (culling with the head is done, see *Head culling*; the
+  HUD could then stay still while markers still line up);
 - take the weapon's fire direction from the controller;
 - a proper first-person camera for the Spy;
 - render both eyes in the same game frame instead of AFR.
