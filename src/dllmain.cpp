@@ -11,6 +11,7 @@
 #include "vr.h"
 #include "hooks.h"
 #include "dihook.h"
+#include "enginepatch.h"
 
 HMODULE g_self;
 
@@ -138,7 +139,7 @@ extern "C" IDirect3D9* WINAPI Proxy_Direct3DCreate9(UINT sdk)
     if (!g_realCreate9) return nullptr;
 
     static bool configLoaded = false;
-    if (!configLoaded) { LoadConfig(); configLoaded = true; }
+    if (!configLoaded) { LoadConfig(); enginepatch::Init(); configLoaded = true; }
 
     if (g_cfg.enabled && vr::Init() && vr::UsesXrApi()) {
         // WinlatorXR: a plain D3D9 device (Wine), the game window is what the headset shows.

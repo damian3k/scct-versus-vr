@@ -9,6 +9,7 @@
 #include "vrmath.h"
 #include "config.h"
 #include "log.h"
+#include "enginepatch.h"
 #include <cstdio>
 #include <cstdarg>
 #include <share.h>
@@ -92,6 +93,10 @@ SetVSConstF_t oSetVSConstF;
 struct DevState {
     IDirect3DDevice9* dev = nullptr;
     D3DMATRIX view = Identity(), proj = Identity();
+    // The camera as the engine built it. Same as view / proj, except for the main view with head
+    // culling (enginepatch): then the engine's matrices come from the head camera, and so do the
+    // matrices in vertex shader constants and in screen-space texture matrices.
+    D3DMATRIX viewEng = Identity(), projEng = Identity();
     bool haveView = false, haveProj = false;
     UINT bbW = 0, bbH = 0;
     bool rtMain = true;
@@ -214,12 +219,12 @@ void Apply(IDirect3DDevice9* dev)
         D.frameStereo = true;
         D.stereoApplies++;
         if (g_cfg.fixShaderMatrices) {
-            D.vpValid = Inverse(Mul(D.view, D.proj), &D.vpInv);
+            D.vpValid = Inverse(Mul(D.viewEng, D.projEng), &D.vpInv);   // what the game put in the shader constants
             D.vpNew = Mul(v, p);
         }
         D3DMATRIX eyeInv, projInv;
         D.eyeToGame = Inverse(v, &eyeInv) ? Mul(eyeInv, D.view) : Identity();
-        D.screenFixValid = Inverse(D.proj, &projInv);
+        D.screenFixValid = Inverse(D.projEng, &projInv);   // screen-space texture matrices use the engine's projection
         if (D.screenFixValid) D.screenFix = Mul(p, projInv);
         D3DMATRIX gameInv;
         if (Inverse(D.view, &gameInv)) {
@@ -734,9 +739,14 @@ void FixCameraSpaceTexgen(IDirect3DDevice9* dev)
             continue;
         }
         D3DMATRIX m = D.eyeToGame;
-        if ((ci & 0xFFFF0000) != D3DTSS_TCI_CAMERASPACEPOSITION)
+        bool position = (ci & 0xFFFF0000) == D3DTSS_TCI_CAMERASPACEPOSITION;
+        bool screen = position && D.screenFixValid && StageSamplesScreen(dev, i);
+        // Head culling: the game's texture matrix was built from the engine's modified camera.
+        D3DMATRIX q;
+        if (!screen && enginepatch::CameraSpaceFix(&q)) m = Mul(m, q);
+        if (!position)
             m._41 = m._42 = m._43 = 0.0f;   // normals / reflection vectors: rotation only
-        else if (D.screenFixValid && StageSamplesScreen(dev, i))
+        else if (screen)
             m = D.screenFix;
         D3DMATRIX t = Mul(m, D.texT[i]);
         oSetTransform(dev, (D3DTRANSFORMSTATETYPE)(D3DTS_TEXTURE0 + i), &t);
@@ -1384,6 +1394,12 @@ HRESULT STDMETHODCALLTYPE hkSetTransform(IDirect3DDevice9* dev, D3DTRANSFORMSTAT
         if (D.dump) Dump("TEXTURE%d matrix set", i);
     }
     if (!m || (state != D3DTS_VIEW && state != D3DTS_PROJECTION)) return oSetTransform(dev, state, m);
+    // Head culling (enginepatch): the engine built this camera from the head's orientation; the game
+    // camera it replaced is what the rest of the mod works with.
+    D3DMATRIX undone;
+    (state == D3DTS_VIEW ? D.viewEng : D.projEng) = *m;
+    if (state == D3DTS_VIEW && enginepatch::UndoView(*m, &undone)) m = &undone;
+    else if (state == D3DTS_PROJECTION && enginepatch::UndoProj(*m, &undone)) m = &undone;
     if (state == D3DTS_VIEW) {
         D.view = *m; D.haveView = true; D.viewSets++;
         D3DMATRIX cam;

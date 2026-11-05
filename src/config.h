@@ -79,6 +79,13 @@ struct Config {
     bool  spyFpvShowBody = true;      // keep drawing the body (hands, arms); only small gear is hidden
 
     int   desktopMirror = 2;          // PC window during gameplay: 0 raw frames, 1 right eye + HUD over the window, 2 right eye + HUD as in the headset
+    // Engine hook (enginepatch.cpp): the engine builds the main camera (and so culls) from the head's
+    // orientation instead of the controller-steered game camera; the mod undoes the change before
+    // the matrices reach the device, so the game's logic and the mod's aiming keep the game camera.
+    bool  headCull = true;            // 1 = cull from where the head looks, 0 = the game's own camera
+    float headCullFov = 125.0f;       // degrees: also widen the engine's FOV for culling (0 = keep the game's)
+    int   headCullToggleKey = 0x78;   // VK_F9: switch head culling on / off in game (0 = none)
+    bool  headCullLog = false;        // diagnostics: log the scene nodes and matrix matching
     int   dumpEverySec = 0;           // diagnostics: write a frame dump every N seconds of gameplay (0 = off)
     bool  d3d12DebugLayer = false;
     int   statsIntervalSec = 10;

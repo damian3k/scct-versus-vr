@@ -22,6 +22,7 @@
 #include "xrapi.h"
 #include "rawinject.h"
 #include "dihook.h"
+#include "enginepatch.h"
 
 #include <dxgi1_4.h>
 #include <d3d9on12.h>
@@ -1594,6 +1595,7 @@ void OnPresent(IDirect3DDevice9* dev)
     S.anglesThisFrame = false;
     S.hudRelThisFrame = false;
     S.frameSceneDraws = 0;
+    enginepatch::NewFrame();
 
     // Main camera of this frame = the position most 3D draws used.
     int best = -1;
@@ -1829,6 +1831,44 @@ bool LaserQuad(Vec3* corners, D3DMATRIX* view, D3DMATRIX* proj, D3DCOLOR* color)
     *view = S.eyeH[S.curEye];
     *proj = S.eyeProj[S.curEye];
     *color = D3DCOLOR_ARGB(170, 255, 40, 30);
+    return true;
+}
+
+bool HeadCullCamera(const float org[3], const int rot[3], float* yaw, float* pitch, float newOrg[3], bool* moved)
+{
+    *moved = false;
+    if (S.xrapi) return false;      // Quest standalone: not tested there, the PC path only
+    if (!S.ok || !S.aimOn || !S.bodyValid || !S.viewsValid || !g_cfg.ignoreGamePitch || g_cfg.worldUpAxis != 2) return false;
+    if (S.frameScope || S.gameZoomed) return false;
+    // Where the head looks, in the game world: the body's yaw plus the head's rotation relative to the reference.
+    Vec3 f = Rotate(Mul(Conj(S.refQ), ToQuat(S.views[0].pose.orientation)), { 0, 0, -1 });
+    *yaw = WrapPi(S.bodyYaw + atan2f(f.x, -f.z));
+    *pitch = atan2f(f.y, sqrtf(f.x * f.x + f.z * f.z));
+
+    // Spy (third person): the VR view is not at the game camera. EyeTransform places it relative to
+    // the spy, in the level body-yaw axes; the engine has to cull from there too.
+    if (ThirdPerson() && S.spyOriginValid) {
+        const float toRad = 6.2831853f / 65536.0f;
+        float gp = rot[0] * toRad, gy = rot[1] * toRad;       // the game camera's own rotation (roll ignored)
+        float cp = cosf(gp), sp = sinf(gp), cy = cosf(gy), sy = sinf(gy);
+        Vec3 gf = { cp * cy, cp * sy, sp };
+        Vec3 gr = { -sy, cy, 0.0f };
+        Vec3 gu = { -sp * cy, -sp * sy, cp };
+        Vec3 ff = { cosf(S.bodyYaw), sinf(S.bodyYaw), 0.0f };
+        Vec3 rr = { -ff.y, ff.x, 0.0f };
+        Vec3 up = { 0, 0, 1 };
+        Vec3 pos = { org[0], org[1], org[2] };
+        if (S.spyFpv) {
+            pos = SpyEyeBase() + rr * S.eyeRight + up * S.eyeUp + ff * S.eyeFwd;
+        } else if (g_cfg.spyStableCamera) {
+            Vec3 d = pos - S.spyOrigin;
+            pos = S.spyOrigin + rr * Dot(d, gr) + up * Dot(d, gu) + ff * Dot(d, gf);
+        } else {
+            return true;
+        }
+        newOrg[0] = pos.x; newOrg[1] = pos.y; newOrg[2] = pos.z;
+        *moved = true;
+    }
     return true;
 }
 
