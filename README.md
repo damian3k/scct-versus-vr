@@ -204,6 +204,10 @@ the node: origin floats at `+0x194`, rotation as 3 ints pitch/yaw/roll with 6553
 - The engine builds the texture matrices of projected lights, shadows and reflections from the
   same node, so `FixCameraSpaceTexgen` also multiplies `enginepatch::CameraSpaceFix()` (game
   camera space → modified camera space) in front of the game's matrix.
+- Matrices the engine puts into vertex shader constants (light shafts, spy camouflage) and into
+  screen-space texture matrices are `X × View × Proj` of the node it built, so `FixWvp` and the
+  screen-space fix use the camera exactly as the engine sent it (`viewEng` / `projEng` in
+  `hooks.cpp`), not the game camera `UndoView` / `UndoProj` give back to the rest of the mod.
 - Off on the Quest standalone backend (`S.xrapi`). `HeadCullingLog=1` logs each node handled and
   the matching in `SCCT_VR.log`.
 

@@ -93,6 +93,10 @@ SetVSConstF_t oSetVSConstF;
 struct DevState {
     IDirect3DDevice9* dev = nullptr;
     D3DMATRIX view = Identity(), proj = Identity();
+    // The camera as the engine built it. Same as view / proj, except for the main view with head
+    // culling (enginepatch): then the engine's matrices come from the head camera, and so do the
+    // matrices in vertex shader constants and in screen-space texture matrices.
+    D3DMATRIX viewEng = Identity(), projEng = Identity();
     bool haveView = false, haveProj = false;
     UINT bbW = 0, bbH = 0;
     bool rtMain = true;
@@ -215,12 +219,12 @@ void Apply(IDirect3DDevice9* dev)
         D.frameStereo = true;
         D.stereoApplies++;
         if (g_cfg.fixShaderMatrices) {
-            D.vpValid = Inverse(Mul(D.view, D.proj), &D.vpInv);
+            D.vpValid = Inverse(Mul(D.viewEng, D.projEng), &D.vpInv);   // what the game put in the shader constants
             D.vpNew = Mul(v, p);
         }
         D3DMATRIX eyeInv, projInv;
         D.eyeToGame = Inverse(v, &eyeInv) ? Mul(eyeInv, D.view) : Identity();
-        D.screenFixValid = Inverse(D.proj, &projInv);
+        D.screenFixValid = Inverse(D.projEng, &projInv);   // screen-space texture matrices use the engine's projection
         if (D.screenFixValid) D.screenFix = Mul(p, projInv);
         D3DMATRIX gameInv;
         if (Inverse(D.view, &gameInv)) {
@@ -1393,6 +1397,7 @@ HRESULT STDMETHODCALLTYPE hkSetTransform(IDirect3DDevice9* dev, D3DTRANSFORMSTAT
     // Head culling (enginepatch): the engine built this camera from the head's orientation; the game
     // camera it replaced is what the rest of the mod works with.
     D3DMATRIX undone;
+    (state == D3DTS_VIEW ? D.viewEng : D.projEng) = *m;
     if (state == D3DTS_VIEW && enginepatch::UndoView(*m, &undone)) m = &undone;
     else if (state == D3DTS_PROJECTION && enginepatch::UndoProj(*m, &undone)) m = &undone;
     if (state == D3DTS_VIEW) {
