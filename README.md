@@ -36,7 +36,7 @@ For players: see [`USER_GUIDE.md`](USER_GUIDE.md) and [`controls.txt`](controls.
 
 ---
 
-## Status (v0.8.4)
+## Status (v0.8.5)
 
 Working (tested on Meta Quest 3 through Virtual Desktop, RTX 3090, online matches):
 
@@ -400,6 +400,9 @@ and videos after every change:
     corrected per draw; a steady PC window (one eye + HUD) for streaming.
 12. **Quest standalone (in progress):** WinlatorXR's XR API backend, input through DirectInput
     injection under Wine, the HUD drawn into the eye images, mono mode for performance.
+13. **Head culling (v0.8.5, by Michiel Huiskens):** a hook in the engine's scene node update makes
+    the game cull from where the head looks; shader and screen-space matrix fixes follow the
+    camera the engine built.
 
 ---
 
@@ -441,6 +444,7 @@ Goal: play on a Quest without a PC, from the player's own game files. Not releas
 
 ## Credits and licenses
 
+- Head culling (v0.8.5) — Michiel Huiskens ([mic79](https://github.com/mic79)).
 - Enhanced SCCT Versus — Joshhhuaaa; SCCT Versus Reloaded — AllyPal (MIT). This mod does not ship
   or modify their files.
 - OpenXR loader and headers — Khronos Group, Apache-2.0 (`deps/openxr/share/doc/openxr/LICENSE`).
