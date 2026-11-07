@@ -174,6 +174,7 @@ Every option is commented in the file. The most useful ones:
 | `MenuMouseSpeed` | 1500 | right-stick cursor speed in menus |
 | `WeaponOffsetX/Y/Z`, `WeaponPitch` | 10 / −15 / 20, 0 | position/tilt of the gun in your hand |
 | `FixProjectedLights` | 1 | keeps the flashlight and shadows fixed to the world |
+| `HeadCulling` / `HeadCullingFov` / `HeadCullingToggleKey` | 1 / 125 / 0x78 | the game draws what you look at, not only what the gun points at (no missing walls or black areas when you look away from where you aim); FOV (°) it culls with; key that switches it on / off in game (F9) |
 | `ReprojectScreenBoxes` / `ScreenBoxDistance` | 1 / 6 | merc motion vision: the box around a moving object is moved onto the object in each eye; distance (m) assumed for it |
 | `DesktopMirror` | 2 | PC window during gameplay (for streaming / people watching), the right eye: 2 = like in the headset, the HUD where you see it in VR (the crosshair follows the gun); 1 = the HUD over the whole window; 0 = the raw headset frames (eyes alternate, no HUD) |
 
@@ -206,9 +207,10 @@ forward **UDP 7776 and 8888** on your router manually and give friends your `IP:
 
 ## Known issues
 
-- **Looking behind you causes graphical glitches** (missing walls and objects, black areas). The
-  game only draws what its own camera sees (where you aim / the spy camera looks) and leaves out
-  the rest. We are still working out what to do about it.
+- **Looking away from where you aim can still show glitches** (missing walls and objects, black
+  areas) if `HeadCulling` is off. The game only draws what its own camera sees (where you aim /
+  the spy camera looks); `HeadCulling=1` (default, F9 switches it in game) makes it use your head
+  instead. Quest standalone is not covered yet.
 - **Spy first-person view** is experimental and can behave strangely (see above).
 - Each eye gets every second game frame, so the game needs about twice the headset refresh rate.
 - The HUD follows the weapon, so it moves when you aim around.
